@@ -52,6 +52,8 @@ pub struct Tuner {
     preset: usize,
     work: Option<Work>,
     bars: [Spring; N_SPEEDS],
+    /// CPU/GPU tiles slide under a fixed centre box, like the menu carousels
+    tab_slide: Spring,
     drag_col: bool,
     drag_label: Option<(usize, f32, i32)>,
     hover_label: Option<usize>,
@@ -94,6 +96,7 @@ impl Tuner {
             preset: 0,
             work: None,
             bars: [Spring::new(0.0); N_SPEEDS],
+            tab_slide: Spring::new(0.0),
             drag_col: false,
             drag_label: None,
             hover_label: None,
@@ -501,18 +504,25 @@ impl Tuner {
         self.arrows = [la, ra];
         let pulse = 0.5 + 0.5 * ((now - self.changed_at) as f32 * std::f32::consts::TAU / 1.25).cos();
         let labels = [('\u{F0EE0}', "CPU  ·  table 1"), ('\u{F08AE}', "GPU  ·  table 2")];
+        // the box never moves: the selected tile slides under it, the other
+        // one waits a slot away (the end of the list is just an empty slot)
+        self.tab_slide.target = self.tab as f32;
+        self.tab_slide.update(dt, 17.0);
+        let (tw, gap) = (250.0, 290.0);
+        let bx = ui.w * 0.5 - tw * 0.5;
+        let by = sy + 7.0;
+        ui.rrect(bx, by, tw, sh - 14.0, 10.0, Color::new(0.10, 0.11, 0.11, 0.70));
+        ui.rrect_line(bx - 1.0, by - 1.0, tw + 2.0, sh - 12.0, 11.0, 2.5, Color::new(LIME.r, LIME.g, LIME.b, hl * (0.35 + 0.65 * pulse)));
         for (i, (g, l)) in labels.iter().enumerate() {
-            let tw = 250.0;
-            let x = ui.w * 0.5 + if i == 0 { -tw - 20.0 } else { 20.0 };
-            let r = Rect::new(x, sy + 7.0, tw, sh - 14.0);
-            let on = self.tab == i;
-            if on {
-                ui.rrect(r.x, r.y, r.w, r.h, 10.0, Color::new(0.10, 0.11, 0.11, 0.70));
-                ui.rrect_line(r.x - 1.0, r.y - 1.0, r.w + 2.0, r.h + 2.0, 11.0, 2.5, Color::new(LIME.r, LIME.g, LIME.b, hl * (0.35 + 0.65 * pulse)));
-            }
-            let col = if on { TXT } else { Color::new(0.85, 0.87, 0.88, 0.7) };
+            let d = i as f32 - self.tab_slide.value;
+            let x = bx + d * gap;
+            let r = Rect::new(x, by, tw, sh - 14.0);
+            let near = 1.0 - d.abs().min(1.0); // 1 under the box, 0 a slot away
+            let a = 0.7 + 0.3 * near;
+            let col = Color::new(0.85 + 0.10 * near, 0.87 + 0.09 * near, 0.88 + 0.08 * near, a);
+            let lab = Color::new(col.r + (LIME.r - col.r) * near, col.g + (LIME.g - col.g) * near, col.b + (LIME.b - col.b) * near, a);
             ui.icon(*g, r.x + 34.0, r.y + r.h * 0.5, 32.0, col);
-            ui.text_sh(l, r.x + 64.0, r.y + 31.0, 22.0, if on { LIME } else { col }, Align::Left);
+            ui.text_sh(l, r.x + 64.0, r.y + 31.0, 22.0, lab, Align::Left);
             self.tiles[i] = r;
         }
 

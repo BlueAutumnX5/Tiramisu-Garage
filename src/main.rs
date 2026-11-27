@@ -93,13 +93,11 @@ impl StripState {
     }
 }
 
-/// Where a strip's first item sits and how far it should be scrolled.
 /// Which item index sits at the centre of the strip. Like the game's
-/// three-icon carousel: the selection box stays put in the middle and the
-/// icons scroll under it; only on the first and last item does the scroll
-/// stop and the box walk to the side.
-fn strip_scroll_target(n: usize, sel: usize) -> f32 {
-    if n <= 3 { (n as f32 - 1.0) * 0.5 } else { (sel as f32).clamp(1.0, n as f32 - 2.0) }
+/// carousel: the selection box never moves, the selected icon is always
+/// scrolled under it, and the ends of the list just leave empty slots.
+fn strip_scroll_target(_n: usize, sel: usize) -> f32 {
+    sel as f32
 }
 
 /// Opacity of an icon `d` slots away from the centre: the three middle
@@ -277,9 +275,9 @@ impl Demo {
         let steps = vec![
             (1.0, Shot("01-main")),
             (1.2, Right),
-            (1.27, Shot("02-box-walks-to-centre")),
+            (1.27, Shot("02-icons-slide")),
             (1.7, Right),
-            (1.76, Shot("03-icons-slide-box-stays")),
+            (1.76, Shot("03-icons-slide-more")),
             (2.3, Shot("04-main-centred")),
             (2.5, Tool(1)),
             (2.9, Shot("05-main-performance")),
@@ -1456,10 +1454,9 @@ impl App {
             hits.push((Rect::new(x - SLOT * 0.5, STRIP_Y, SLOT, STRIP_H), i));
         }
 
-        // label under the strip, in lime, under the selected item
+        // label under the strip, in lime; stays centred like the game's, even when the box slides to an end
         if let Some(it) = items.get(st.sel) {
-            let lx = bx.clamp(160.0, w - 160.0);
-            ui.text_sh(&it.label, lx, STRIP_Y + STRIP_H + 40.0, 32.0, Color::new(LIME.r, LIME.g, LIME.b, hl.max(0.25)), Align::Center);
+            ui.text_sh(&it.label, w * 0.5, STRIP_Y + STRIP_H + 40.0, 32.0, Color::new(LIME.r, LIME.g, LIME.b, hl.max(0.25)), Align::Center);
         }
         self.hits.items = hits;
         self.hits.prev = Some(lp);

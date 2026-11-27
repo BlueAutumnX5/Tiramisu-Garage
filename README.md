@@ -24,9 +24,9 @@ uses no game assets.
   Media Lab, Paint Shop, Options).
 - **Enter on a tool** opens a second carousel with that tool's sub-commands,
   e.g. `safe-update check / post / fix-dkms / after-reboot / …`.
-- **Carousel behaviour:** the selection box stays in the centre while the icons
-  slide under it. It only moves to the side on the first and last item. Icons
-  fade smoothly the further they are from the centre.
+- **Carousel behaviour:** the selection box and the name under it never move;
+  the icons slide under the box, and at either end of the list the empty slots
+  just stay empty. Icons fade smoothly the further they are from the centre.
 - **Fan Curve Tuner (built in):** the "ECU tuning" bar chart for both MSI EC
   fan tables (CPU and GPU). Red means quieter than the MSI factory curve, dark
   teal means louder, and the orange box is the step the fan is on right now.
