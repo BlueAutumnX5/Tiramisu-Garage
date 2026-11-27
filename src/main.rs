@@ -32,6 +32,14 @@ const FONT_MONO: &[u8] = include_bytes!("../assets/garage-mono.ttf");
 
 const SLOT: f32 = 236.0;
 /// Height of the bottom panel (2 button rows + padding); content stays above it.
+/// The game's dialog palette (from the "Jump to Garage?" box), shared by
+/// dialogs and the Options list: pale lime frame, grey panel, a button grey a
+/// shade darker than the panel, and a near-black selected button.
+const FRAME: Color = Color::new(0.84, 0.90, 0.66, 0.95);
+const PANEL: Color = Color::new(0.29, 0.30, 0.30, 0.94);
+const BTN: Color = Color::new(0.25, 0.26, 0.26, 0.96);
+const BTN_SEL: Color = Color::new(0.13, 0.135, 0.135, 0.96);
+
 pub const FOOTER_H: f32 = 28.0 * 2.0 + 7.0 + 22.0;
 const STRIP_Y: f32 = 94.0;
 const STRIP_H: f32 = 150.0;
@@ -134,6 +142,7 @@ enum DAction {
     TunerApply,
     TunerLeave,
     Quit,
+    ViewLog,
 }
 
 enum Dialog {
@@ -213,6 +222,8 @@ struct App {
     opt_sel: usize,
     sfx: Sfx,
     scene: scene::Scene,
+    /// last mouse position while the middle button holds the turntable
+    grab_last: Option<Vec2>,
     dim: Spring,
     toast: Option<(String, f64, Color)>,
     picker: Option<(Receiver<Option<Vec<String>>>, Pending)>,
@@ -253,6 +264,12 @@ enum DStep {
     Hold(i32),
     /// Options screen: like pressing Down
     OptDown,
+    /// easter egg: a middle-button drag by (dx, dy) virtual pixels
+    Grab(f32, f32),
+    /// the "job finished" question
+    JobDone,
+    /// a short OK-only note
+    Note(&'static str),
     Quit,
 }
 
@@ -334,7 +351,22 @@ impl Demo {
             (29.6, Tool(11)),
             (29.9, Enter),
             (30.7, Shot("19-options")),
-            (30.9, Quit),
+            (30.9, Back),
+            (31.8, Shot("20-before-grab")),
+            (32.2, Grab(-160.0, 0.0)),
+            (32.6, Shot("21-grab-spun-left")),
+            (33.0, Grab(0.0, -400.0)),
+            (33.4, Shot("22-grab-camera-up")),
+            (33.8, Grab(0.0, 900.0)),
+            (34.2, Shot("23-grab-camera-down")),
+            (35.5, Shot("24-still-resting")),
+            (35.8, JobDone),
+            (36.4, Shot("25-job-done-dialog")),
+            (36.95, Shot("25b-job-done-blink")),
+            (37.1, DialogNo),
+            (37.4, Note("The EC already has this curve.")),
+            (38.0, Shot("26-ok-only-dialog")),
+            (38.3, Quit),
         ];
         let steps = if std::env::var("GARAGE_DEMO_HOLD").is_ok() {
             // hold-key stress test: hold Right, then Left, on the main menu and in Phone Doctor
@@ -425,7 +457,9 @@ impl App {
         icons.sort_unstable();
         icons.dedup();
         let fs = |size: f32| (size * k).round().clamp(4.0, 400.0) as u16;
-        for size in [46.0, 38.0, 32.0, 24.0, 22.0, 20.0, 19.0, 18.0, 17.0, 16.0, 15.0] {
+        // every literal size drawn anywhere: a size missing here rasterises mid-frame
+        // (opening Options froze for 0.7 s on its 26/27 px rows)
+        for size in [50.0, 46.0, 40.0, 38.0, 32.0, 30.0, 28.0, 27.0, 26.0, 24.0, 22.0, 20.0, 19.0, 18.0, 17.0, 16.0, 15.0, 12.0] {
             self.ui.font.populate_font_cache(&text, fs(size));
         }
         for size in [24.0, 22.0, 15.0, 14.0] {
@@ -452,6 +486,7 @@ impl App {
             demo.t0 = now;
         }
         let el = now - demo.t0;
+        if get_frame_time() > 0.15 { eprintln!("SLOW el={el:.2} dt={:.2}", get_frame_time()); }
         let until: f64 = std::env::var("GARAGE_DEMO_UNTIL").ok().and_then(|v| v.parse().ok()).unwrap_or(f64::MAX);
         if el > until {
             self.quit = true;
@@ -508,6 +543,9 @@ impl App {
                 DStep::TunerTab => self.tuner.demo_tab(now),
                 DStep::TunerHelp => self.dialog = Some(Dialog::Message { text: tuner::HELP.into(), opened: now }),
                 DStep::TunerEsc => self.back(),
+                DStep::Grab(dx, dy) => self.scene.grab(vec2(dx, dy), now),
+                DStep::JobDone => self.job_done_dialog("Pre-Flight Check", true),
+                DStep::Note(t) => self.dialog = Some(Dialog::Message { text: t.into(), opened: now }),
                 DStep::OptDown => {
                     self.opt_sel = (self.opt_sel + 1) % OPT_ROWS.len();
                     self.ui.press("sb_down");
@@ -541,6 +579,17 @@ impl App {
 
     fn fx(&self, fx: Fx) {
         self.sfx.play(fx, self.opts.sound, self.opts.volume);
+    }
+
+    /// A job ended while you were elsewhere: ask, the game's way, whether to look.
+    fn job_done_dialog(&mut self, title: &str, ok: bool) {
+        let text = if ok { format!("“{title}” finished. View the log?") } else { format!("“{title}” failed. View the log?") };
+        if self.dialog.is_none() {
+            self.dialog = Some(Dialog::Confirm { text, yes: true, action: DAction::ViewLog, opened: self.now() });
+        } else {
+            // never knock away a question that is already open
+            self.toast(text, if ok { LIME } else { RED });
+        }
     }
 
     fn toast(&mut self, s: impl Into<String>, col: Color) {
@@ -813,6 +862,11 @@ impl App {
     fn dialog_choice(&mut self, action: DAction) {
         match action {
             DAction::Run(p) => self.proceed(p),
+            DAction::ViewLog => {
+                if self.job.is_some() && self.screen() != Screen::Log {
+                    self.go(Nav::Push(Screen::Log));
+                }
+            }
             DAction::ReplaceJob(p) => {
                 self.job = None;
                 self.execute(p);
@@ -1323,6 +1377,17 @@ impl App {
         let full = matches!(self.screen(), Screen::Log | Screen::Options | Screen::Dyno | Screen::Tuner);
         self.dim.target = if full { 1.0 } else if self.dialog.is_some() { 0.45 } else { 0.0 };
         self.dim.update(dt, 8.0);
+        // easter egg: hold the middle button and drag to spin the turntable
+        // and raise the camera (only while the garage is actually visible)
+        let m = self.ui.mouse();
+        if is_mouse_button_down(MouseButton::Middle) && self.dim.value < 0.6 && m.x > -999.0 {
+            if let Some(last) = self.grab_last {
+                self.scene.grab(m - last, now);
+            }
+            self.grab_last = Some(m);
+        } else {
+            self.grab_last = None;
+        }
         self.scene.draw(dt, self.opts.spin, now, self.dim.value);
 
         self.hits = Hits::default();
@@ -1684,7 +1749,10 @@ impl App {
         let ui = &self.ui;
         let (x, y) = (60.0, 100.0);
         let (w, h) = (ui.w - 120.0, ui.h - 100.0 - FOOTER_H - 14.0);
-        ui.rrect_grad(x, y, w, h, 16.0, Color::new(0.78, 0.80, 0.80, 0.40), Color::new(0.62, 0.64, 0.64, 0.38));
+        // same look as the dialogs: dark button grey, pale lime frame
+        ui.rrect(x, y, w, h, 14.0, BTN);
+        ui.rrect_line(x, y, w, h, 14.0, 2.5, FRAME);
+        let lime = self.lime_pulse(0.0);
         let o = &self.opts;
         let row_h = 52.0;
         let vx = x + w * 0.58; // value column
@@ -1707,9 +1775,9 @@ impl App {
             let sel = i == self.opt_sel;
             let rr = Rect::new(x + 18.0, ry, w - 36.0 - 40.0, row_h - 6.0);
             if sel {
-                ui.rrect(rr.x, rr.y, rr.w, rr.h, 9.0, Color::new(0.14, 0.15, 0.15, 0.88));
+                ui.rrect(rr.x, rr.y, rr.w, rr.h, 9.0, BTN_SEL);
             }
-            ui.text_sh(name, rr.x + 24.0, ry + 33.0, 27.0, if sel { LIME_DIM } else { TXT }, Align::Left);
+            ui.text_sh(name, rr.x + 24.0, ry + 33.0, 27.0, if sel { lime } else { TXT }, Align::Left);
             let slider = |val: f32, max: f32| {
                 let (sx, sw) = (vx + 70.0, w * 0.22);
                 ui.rrect(sx, ry + 18.0, sw, 9.0, 4.5, Color::new(0.08, 0.09, 0.09, 0.7));
@@ -1947,6 +2015,18 @@ impl App {
         self.hits.footer = hits;
     }
 
+    /// Lime text for a selected button or row, like the game's: it blinks
+    /// smoothly between full lime and almost gone (no outline on the button).
+    fn lime_pulse(&self, since: f64) -> Color {
+        let p = 0.5 + 0.5 * ((self.now() - since) as f32 * std::f32::consts::TAU / 1.1).cos();
+        Color::new(LIME.r, LIME.g, LIME.b, 0.06 + 0.94 * p)
+    }
+
+    /// The game's "Jump to Garage?" box: a dark see-through frame with a pale
+    /// lime outline, a grey inner panel holding the centred question, and wide
+    /// buttons along the panel's bottom. The selected button is dark with
+    /// pulsing lime text; the other is a shade darker than the panel. Behind
+    /// it the screen is darkened but stays visible.
     fn draw_dialog(&mut self) {
         let now = self.now();
         let Some(dlg) = self.dialog.as_ref() else { return };
@@ -1958,30 +2038,45 @@ impl App {
         let mut ui2 = ui.faded(a);
         ui2.dx = 0.0;
         let ui = &ui2;
-        ui.rect(0.0, 0.0, ui.w, ui.h, Color::new(0.0, 0.0, 0.0, 0.35));
-        // a Message wraps its text; the box grows to fit
+        ui.rect(0.0, 0.0, ui.w, ui.h, Color::new(0.0, 0.0, 0.0, 0.50));
+
+        const TS: f32 = 27.0; // question text size
+        const BH: f32 = 56.0; // button height
         let msg_lines: Vec<String> = match dlg {
-            Dialog::Message { text, .. } => wrap(ui, text, 22.0, 760.0),
+            Dialog::Message { text, .. } => wrap(ui, text, 22.0, 720.0),
             _ => Vec::new(),
         };
-        let (w, h) = match dlg {
-            Dialog::Input { .. } => (720.0, 236.0),
-            Dialog::Message { .. } => (820.0, 130.0 + msg_lines.len() as f32 * 30.0),
-            _ => (720.0, 196.0),
+        // an OK-only box hugs its text; questions get the game's wide box
+        let (w, body) = match dlg {
+            Dialog::Message { .. } => {
+                let tw = msg_lines.iter().map(|l| ui.measure(l, 22.0)).fold(0.0, f32::max);
+                ((tw + 110.0).clamp(460.0, 820.0), 56.0 + msg_lines.len() as f32 * 30.0)
+            }
+            Dialog::Confirm { text, .. } => ((ui.measure(text, TS) + 140.0).clamp(640.0, 900.0), 124.0),
+            Dialog::Input { .. } => (760.0, 160.0),
         };
+        let top = 60.0; // the dark band above the inner panel
+        let (m, gap) = (12.0, 10.0);
+        let h = top + body + BH + gap + m + 4.0;
         let x = ui.w * 0.5 - w * 0.5;
         let y = ui.h * 0.5 - h * 0.5 - 30.0 + (1.0 - ease_out(a)) * 12.0;
-        ui.rrect_grad(x, y, w, h, 14.0, Color::new(0.70, 0.72, 0.72, 0.78), Color::new(0.52, 0.54, 0.54, 0.78));
-        ui.rrect_line(x, y, w, h, 14.0, 2.0, LIME);
+        ui.rrect(x, y, w, h, 12.0, Color::new(0.0, 0.0, 0.0, 0.55));
+        ui.rrect_line(x, y, w, h, 12.0, 2.5, FRAME);
+        let (ix, iy, iw) = (x + m, y + top, w - 2.0 * m);
+        let ih = y + h - m - iy;
+        ui.rrect(ix, iy, iw, ih, 10.0, PANEL);
+        let by = iy + ih - gap - BH + 4.0;
+        let mid = iy + (by - iy) * 0.5; // vertical centre of the text area
+
         let (yes_label, no_label, yes_sel) = match dlg {
             Dialog::Confirm { text, yes, .. } => {
-                let t = ui.fit(text, 27.0, w - 60.0);
-                ui.text_sh(&t, x + w * 0.5, y + 70.0, 27.0, TXT, Align::Center);
-                ("Yes", "No", *yes)
+                let t = ui.fit(text, TS, iw - 60.0);
+                ui.text_sh(&t, x + w * 0.5, mid + 10.0, TS, TXT, Align::Center);
+                ("OK", Some("Cancel"), *yes)
             }
             Dialog::Input { prompt, placeholder, text, .. } => {
-                ui.text_sh(prompt, x + w * 0.5, y + 52.0, 26.0, TXT, Align::Center);
-                let (fx, fy, fw) = (x + 40.0, y + 72.0, w - 80.0);
+                ui.text_sh(prompt, x + w * 0.5, iy + 46.0, 26.0, TXT, Align::Center);
+                let (fx, fy, fw) = (ix + 30.0, iy + 66.0, iw - 60.0);
                 ui.rrect(fx, fy, fw, 46.0, 8.0, Color::new(0.03, 0.035, 0.04, 0.9));
                 ui.rrect_line(fx, fy, fw, 46.0, 8.0, 1.5, LIME_DIM);
                 if text.is_empty() {
@@ -1993,37 +2088,50 @@ impl App {
                     let cx = fx + 14.0 + ui.measure_with(&ui.mono, text, 20.0) + 1.0;
                     ui.rect(cx, fy + 11.0, 2.0, 25.0, LIME);
                 }
-                ("OK", "Cancel", true)
+                ("OK", Some("Cancel"), true)
             }
             Dialog::Message { .. } => {
+                // short notes are centred like the game's; long help text reads better left-aligned
+                let n = msg_lines.len() as f32;
+                let y0 = mid - (n - 1.0) * 15.0 + 8.0;
                 for (i, l) in msg_lines.iter().enumerate() {
-                    ui.text_sh(l, x + 30.0, y + 46.0 + i as f32 * 30.0, 22.0, TXT, Align::Left);
+                    if msg_lines.len() <= 2 {
+                        ui.text_sh(l, x + w * 0.5, y0 + i as f32 * 30.0, 22.0, TXT, Align::Center);
+                    } else {
+                        ui.text_sh(l, ix + 30.0, y0 + i as f32 * 30.0, 22.0, TXT, Align::Left);
+                    }
                 }
-                // one centred OK button
-                let r = Rect::new(x + w * 0.5 - 110.0, y + h - 64.0, 220.0, 40.0);
-                ui.rrect(r.x, r.y, r.w, r.h, 8.0, Color::new(0.10, 0.11, 0.11, 0.92));
-                ui.rrect_line(r.x, r.y, r.w, r.h, 8.0, 1.5, Color::new(LIME.r, LIME.g, LIME.b, 0.8));
-                ui.text_sh("OK", r.x + r.w * 0.5, r.y + 28.0, 24.0, LIME, Align::Center);
-                self.hits.dlg_yes = Some(r);
-                self.hits.dlg_no = None;
-                return;
+                ("OK", None, true)
             }
         };
-        let bw = (w - 120.0) * 0.5;
-        let by = y + h - 64.0;
-        let yr = Rect::new(x + 40.0, by, bw, 40.0);
-        let nr = Rect::new(x + w - 40.0 - bw, by, bw, 40.0);
-        for (key, r, label, sel) in [("dlg_yes", yr, yes_label, yes_sel), ("dlg_no", nr, no_label, !yes_sel)] {
-            // selection and hover glide in and out over 250 ms
-            let g = ui.glow(key, sel || self.hovered(&r));
-            let fill = Color::new(0.30 - 0.20 * g, 0.32 - 0.21 * g, 0.32 - 0.21 * g, 0.75 + 0.17 * g);
-            ui.rrect(r.x, r.y, r.w, r.h, 8.0, fill);
-            ui.rrect_line(r.x, r.y, r.w, r.h, 8.0, 1.5, Color::new(LIME.r, LIME.g, LIME.b, 0.8 * g));
-            let col = Color::new(TXT.r + (LIME.r - TXT.r) * g, TXT.g + (LIME.g - TXT.g) * g, TXT.b + (LIME.b - TXT.b) * g, 1.0);
-            ui.text_sh(label, r.x + r.w * 0.5, r.y + 28.0, 24.0, col, Align::Center);
+        let lime = self.lime_pulse(opened);
+        let mut btns: Vec<(&str, Rect, &str, bool)> = Vec::new();
+        match no_label {
+            Some(no) => {
+                let bw = (iw - 3.0 * gap) * 0.5;
+                btns.push(("dlg_yes", Rect::new(ix + gap, by, bw, BH), yes_label, yes_sel));
+                btns.push(("dlg_no", Rect::new(ix + iw - gap - bw, by, bw, BH), no, !yes_sel));
+            }
+            None => {
+                let bw = (iw * 0.5).max(220.0);
+                btns.push(("dlg_yes", Rect::new(ix + iw * 0.5 - bw * 0.5, by, bw, BH), yes_label, true));
+            }
         }
-        self.hits.dlg_yes = Some(yr);
-        self.hits.dlg_no = Some(nr);
+        self.hits.dlg_no = None;
+        for (key, r, label, sel) in btns {
+            // the highlight glides in and out over 250 ms
+            let g = ui.glow(key, sel || self.hovered(&r));
+            let fill = Color::new(BTN.r + (BTN_SEL.r - BTN.r) * g, BTN.g + (BTN_SEL.g - BTN.g) * g, BTN.b + (BTN_SEL.b - BTN.b) * g, BTN.a);
+            ui.rrect(r.x, r.y, r.w, r.h, 10.0, fill);
+            let base = Color::new(0.86, 0.87, 0.88, 1.0);
+            let col = Color::new(base.r + (lime.r - base.r) * g, base.g + (lime.g - base.g) * g, base.b + (lime.b - base.b) * g, 1.0 + (lime.a - 1.0) * g);
+            ui.text_sh(label, r.x + r.w * 0.5, r.y + r.h * 0.5 + 9.0, 26.0, col, Align::Center);
+            if key == "dlg_yes" {
+                self.hits.dlg_yes = Some(r);
+            } else {
+                self.hits.dlg_no = Some(r);
+            }
+        }
     }
 
     fn draw_toast(&mut self) {
@@ -2145,6 +2253,7 @@ async fn main() {
         opt_sel: 0,
         sfx: Sfx::new().await,
         scene: scene::Scene::new(),
+        grab_last: None,
         dim: Spring::new(0.0),
         toast: None,
         picker: None,
@@ -2187,7 +2296,7 @@ async fn main() {
                 let heading_to_log = matches!(app.pending_nav, Some((_, Nav::Push(Screen::Log))));
                 if app.screen() != Screen::Log && !heading_to_log {
                     let t = app.job.as_ref().unwrap().spec.title.clone();
-                    app.toast(if ok { format!("{t}: finished (L to view)") } else { format!("{t}: failed (L to view)") }, if ok { LIME } else { RED });
+                    app.job_done_dialog(&t, ok);
                 }
             }
         }

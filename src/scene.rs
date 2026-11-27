@@ -70,23 +70,54 @@ fn mix(a: Color, b: Color, t: f32) -> Color {
 pub struct Scene {
     pub angle: f32,
     speed: Spring,
+    /// camera height, 0 = normal, up to 1 = high and looking down at the laptop
+    pitch: f32,
+    /// last time the turntable was dragged; auto-spin waits GRAB_REST after it
+    grabbed_at: f64,
 }
+
+/// Camera height limits for the middle-button drag (like the game's garage,
+/// it only goes a little below and a fair bit above the normal view).
+const PITCH_MIN: f32 = -0.25;
+const PITCH_MAX: f32 = 1.0;
+/// turntable radians and pitch units per virtual pixel of mouse travel
+const GRAB_TURN: f32 = 0.010;
+const GRAB_PITCH: f32 = 0.0045;
+/// seconds the turntable stays where it was left before spinning again
+const GRAB_REST: f64 = 15.0;
 
 impl Scene {
     pub fn new() -> Self {
-        Scene { angle: 0.6, speed: Spring::new(0.0) }
+        Scene { angle: 0.6, speed: Spring::new(0.0), pitch: 0.0, grabbed_at: f64::NEG_INFINITY }
+    }
+
+    /// Easter egg: the middle mouse button grabs the turntable. Just holding
+    /// the button changes nothing; once the mouse moves, its movement goes
+    /// straight onto the angle with no smoothing, so a smooth hand gives a
+    /// smooth spin and a rough one a rough spin; up/down raises the camera
+    /// within limits. Let go and it stays put, then after GRAB_REST seconds
+    /// the auto-spin eases back in.
+    pub fn grab(&mut self, d: Vec2, t: f64) {
+        if d == Vec2::ZERO {
+            return;
+        }
+        self.grabbed_at = t;
+        self.angle -= d.x * GRAB_TURN;
+        self.pitch = (self.pitch - d.y * GRAB_PITCH).clamp(PITCH_MIN, PITCH_MAX);
+        self.speed.snap(0.0);
     }
 
     /// `dim` 0..1 darkens the room while a full-screen panel is open.
     pub fn draw(&mut self, dt: f32, spin: bool, t: f64, dim: f32) {
-        self.speed.target = if spin { 0.30 } else { 0.0 };
+        self.speed.target = if spin && t - self.grabbed_at > GRAB_REST { 0.30 } else { 0.0 };
         self.speed.update(dt, 2.0);
         self.angle += self.speed.value * dt;
 
         clear_background(Color::new(0.035, 0.038, 0.042, 1.0));
         set_camera(&Camera3D {
-            position: vec3(0.0, 3.1, 10.9),
-            target: vec3(0.0, 1.45, 0.0),
+            // higher = a bit closer and tilted down toward the laptop
+            position: vec3(0.0, 3.1 + 2.6 * self.pitch, 10.9 - 0.8 * self.pitch),
+            target: vec3(0.0, 1.45 - 0.45 * self.pitch, 0.0),
             up: Vec3::Y,
             fovy: 34f32.to_radians(),
             // the default near plane (0.01) wastes almost all depth precision
