@@ -493,14 +493,20 @@ impl Ui {
     /// and dim at the left end. Returns the button's rect.
     pub fn button(&self, key: &str, x: f32, y: f32, w: f32, h: f32, label: &str, hint: &str, hover: bool) -> Rect {
         let g = self.glow(key, hover);
-        let edge = mix(Color::new(0.72, 0.74, 0.75, 0.95), LIME, g);
+        let edge = mix(Color::new(0.82, 0.84, 0.85, 0.95), LIME, g);
         let txt = mix(TXT, LIME, g);
-        self.rrect(x, y, w, h, 7.0, Color::new(0.02, 0.025, 0.03, 0.86));
+        self.rrect_grad(x, y, w, h, 7.0, Color::new(0.27, 0.28, 0.28, 0.92), Color::new(0.17, 0.18, 0.18, 0.92));
         if g > 0.0 {
             self.rrect(x, y, w, h, 7.0, Color::new(LIME.r, LIME.g, LIME.b, 0.07 * g));
         }
         self.rrect_line(x, y, w, h, 7.0, 1.6, edge);
-        let size = (h * 0.66).min(19.0);
+        // centred label, shrunk a little if it would collide with the hint
+        let hint_w = if hint.is_empty() { 0.0 } else { self.measure_with(&self.black, hint, 12.0) + 14.0 };
+        let room = w - 2.0 * hint_w - 8.0;
+        let mut size = (h * 0.66).min(19.0);
+        while size > 12.0 && self.measure(label, size) > room {
+            size -= 0.5;
+        }
         self.text_sh(label, x + w * 0.5, y + h * 0.5 + size * 0.36, size, txt, Align::Center);
         if !hint.is_empty() {
             self.text_with(&self.black, hint, x + 10.0, y + h * 0.5 + 4.5, 12.0, mix(Color::new(0.55, 0.58, 0.6, 0.9), LIME, g * 0.6), Align::Left);

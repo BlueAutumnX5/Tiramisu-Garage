@@ -521,7 +521,7 @@ impl Tuner {
         let px0 = 96.0;
         let px1 = ui.w - 96.0;
         let py0 = 178.0;
-        let py1 = ui.h - 170.0;
+        let py1 = ui.h - crate::FOOTER_H - 92.0;
         let p = Rect::new(px0, py0, px1 - px0, py1 - py0);
         self.plot = p;
         let cw = p.w / N_SPEEDS as f32;

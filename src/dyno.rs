@@ -183,13 +183,13 @@ impl Dyno {
 
         // tachometer: fan RPM
         let tcx = w * 0.30;
-        let gcy = 372.0;
+        let gcy = 352.0;
         let rpm = self.rpm.value;
         gauge(
             ui,
             tcx,
             gcy,
-            168.0,
+            156.0,
             rpm / 1000.0,
             0.0,
             6.0,
@@ -214,7 +214,7 @@ impl Dyno {
             ui,
             ccx,
             gcy + 8.0,
-            142.0,
+            134.0,
             self.temp.value,
             30.0,
             100.0,
@@ -256,7 +256,8 @@ impl Dyno {
         }
 
         // dyno chart: temperature and RPM history
-        let (cx0, cy0, cw, ch) = (40.0, 560.0, w - 80.0, 92.0);
+        let (cx0, ch) = (40.0, 80.0);
+        let (cy0, cw) = (ui.h - crate::FOOTER_H - ch - 14.0, w - 80.0);
         ui.rrect(cx0, cy0, cw, ch, 10.0, Color::new(0.0, 0.0, 0.0, 0.55));
         ui.rrect_line(cx0, cy0, cw, ch, 10.0, 1.2, Color::new(1.0, 1.0, 1.0, 0.18));
         let ky = cy0 + ch - (kick - 30.0) / 70.0 * ch;

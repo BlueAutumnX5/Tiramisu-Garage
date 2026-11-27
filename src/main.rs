@@ -31,6 +31,8 @@ const FONT_BLACK: &[u8] = include_bytes!("../assets/garage-black.ttf");
 const FONT_MONO: &[u8] = include_bytes!("../assets/garage-mono.ttf");
 
 const SLOT: f32 = 236.0;
+/// Height of the bottom panel (2 button rows + padding); content stays above it.
+pub const FOOTER_H: f32 = 28.0 * 2.0 + 7.0 + 22.0;
 const STRIP_Y: f32 = 94.0;
 const STRIP_H: f32 = 150.0;
 
@@ -1254,7 +1256,7 @@ impl App {
     fn log_geom(&self) -> (f32, f32, f32, f32, f32, f32, usize) {
         let ui = &self.ui;
         let (x, y) = (24.0, 96.0);
-        let (w, h) = (ui.w - 48.0, ui.h - 96.0 - 78.0);
+        let (w, h) = (ui.w - 48.0, ui.h - 96.0 - FOOTER_H - 12.0);
         let size = self.opts.log_size as f32;
         let cw = ui.measure_with(&ui.mono, "MMMMMMMMMM", size) / 10.0;
         let lh = (size * 1.34).round();
@@ -1635,7 +1637,7 @@ impl App {
         self.header("Options", None);
         let ui = &self.ui;
         let (x, y) = (60.0, 100.0);
-        let (w, h) = (ui.w - 120.0, ui.h - 100.0 - 92.0);
+        let (w, h) = (ui.w - 120.0, ui.h - 100.0 - FOOTER_H - 14.0);
         ui.rrect_grad(x, y, w, h, 16.0, Color::new(0.78, 0.80, 0.80, 0.40), Color::new(0.62, 0.64, 0.64, 0.38));
         let o = &self.opts;
         let row_h = 52.0;
@@ -1834,23 +1836,43 @@ impl App {
     fn draw_footer(&mut self) {
         let buttons = self.footer_buttons();
         let ui = &self.ui;
-        let (bw, bh, gx, gy) = (214.0, 26.0, 10.0, 6.0);
-        let band = bh * 2.0 + gy + 20.0;
-        ui.rect(0.0, ui.h - band, ui.w, band, Color::new(0.0, 0.0, 0.0, 0.30));
-        // profile name, bottom-left like the game
-        ui.text_sh("Tiramisu", 34.0, ui.h - band * 0.5 + 8.0, 24.0, TXT, Align::Left);
+        // The game's bottom panel: a see-through darkening with rounded top
+        // corners (its bottom corners run off-screen), a name section on the
+        // left split off by a light divider, buttons in a grid on the right.
+        let (bh, gx, gy) = (28.0, 10.0, 7.0);
+        let pad = 11.0;
+        let ph = bh * 2.0 + gy + pad * 2.0;
+        let (px, py) = (24.0, ui.h - FOOTER_H);
+        let pw = ui.w - 48.0;
+        ui.rrect_grad(px, py, pw, ph + 30.0, 12.0, Color::new(0.0, 0.0, 0.0, 0.42), Color::new(0.0, 0.0, 0.0, 0.58));
+        ui.rrect_line(px, py, pw, ph + 30.0, 12.0, 1.0, Color::new(1.0, 1.0, 1.0, 0.14));
+        let name_w = (pw * 0.25).clamp(220.0, 320.0);
+        let div_x = px + name_w;
+        // long buttons like the game's (~a quarter of the screen); screens
+        // with many buttons shrink them just enough to fit beside the name
+        let cols = buttons.len().div_ceil(2).max(1) as f32;
+        let avail = pw - name_w - pad * 2.0 - gx * (cols - 1.0);
+        let bw = (avail / cols).min(292.0);
+        ui.rect(div_x - 1.5, py + 4.0, 3.0, ph + 30.0, Color::new(0.92, 0.94, 0.94, 0.55));
+        let mid = py + ph * 0.5;
         let running = self.job.as_ref().map(|j| j.running()).unwrap_or(false);
-        if running && self.screen() != Screen::Log {
-            ui.chip(150.0, ui.h - band * 0.5, "JOB RUNNING", LIME);
+        let job_chip = running && self.screen() != Screen::Log;
+        ui.text_sh("Tiramisu", px + name_w * 0.5, mid + if job_chip { 0.0 } else { 8.0 }, 24.0, TXT, Align::Center);
+        if job_chip {
+            let cw = ui.measure_with(&ui.black, "JOB RUNNING", 14.0) + 16.0;
+            ui.chip(px + name_w * 0.5 - cw * 0.5, mid + 20.0, "JOB RUNNING", LIME);
         }
         // grid: column by column from the right, top cell then bottom cell
-        let y_top = ui.h - band + 10.0;
+        let y_top = py + pad;
         let m = ui.mouse();
         let mut hits = Vec::new();
         for (i, b) in buttons.iter().enumerate() {
             let col = (i / 2) as f32;
             let row = (i % 2) as f32;
-            let x = ui.w - 30.0 - bw - col * (bw + gx);
+            let x = px + pw - pad - bw - col * (bw + gx);
+            if x < div_x + pad {
+                break; // never draw over the name section
+            }
             let y = y_top + row * (bh + gy);
             let r = Rect::new(x, y, bw, bh);
             let accent = b.act == FAct::TunerPill(4) && self.tuner.dirty();
@@ -1951,7 +1973,7 @@ impl App {
         let ui = self.ui.faded(a);
         let w = ui.measure(&text, 22.0) + 60.0;
         let x = ui.w * 0.5 - w * 0.5;
-        let y = ui.h - 124.0 + (1.0 - ease_out(a)) * 10.0;
+        let y = ui.h - FOOTER_H - 52.0 + (1.0 - ease_out(a)) * 10.0;
         ui.rrect(x, y, w, 40.0, 20.0, Color::new(0.03, 0.035, 0.04, 0.85));
         ui.rrect_line(x, y, w, 40.0, 20.0, 1.5, col);
         ui.text_sh(&text, x + w * 0.5, y + 28.0, 22.0, col, Align::Center);
