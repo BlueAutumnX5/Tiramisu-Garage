@@ -127,6 +127,12 @@ impl Ui {
     /// Mouse position in virtual units (ignores the slide offset on purpose:
     /// hit boxes are recorded without it).
     pub fn mouse(&self) -> Vec2 {
+        // demo mode drives the UI itself; a real cursor resting over the
+        // window would otherwise light up buttons in the screenshots
+        static DEMO: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *DEMO.get_or_init(|| std::env::var_os("GARAGE_DEMO").is_some()) {
+            return vec2(-1000.0, -1000.0);
+        }
         let (x, y) = mouse_position();
         vec2(x / self.k, y / self.k)
     }
