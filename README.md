@@ -40,6 +40,10 @@ uses no game assets.
 - **Footer buttons** like the game's: long rounded bars in a two-row grid that
   fills from the right; they glide to lime over 250 ms on hover, click or hotkey.
   Arrow buttons pop on press and grey out when there is nothing left that way.
+- **Display switches** (Options, all off by default for the clean look of
+  the game): the "N commands inside" count, the description line, the
+  coloured tags (KONSOLE, APP, BUILT-IN, ASKS FIRST) and the hotkey hints
+  inside the footer buttons.
 - **Options:** the list panel with values: sounds, volume, turntable, animation
   speed, fullscreen, default phone, log text size.
 

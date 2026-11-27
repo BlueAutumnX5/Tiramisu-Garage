@@ -230,6 +230,8 @@ struct App {
     warm_k: f32,
     /// Options scrollbar marker, gliding between rows
     opt_dot: Spring,
+    /// first visible Options row (fractional while scrolling)
+    opt_top: Spring,
 }
 
 /// Scripted walk through every screen, saving a PNG at each stop.
@@ -358,7 +360,18 @@ impl Demo {
                 (10.6, OptDown),
                 (10.64, Shot("opt-dot-gliding")),
                 (11.2, Shot("opt-settled")),
-                (11.4, Quit),
+                (11.4, OptDown),
+                (11.5, OptDown),
+                (11.6, OptDown),
+                (11.7, OptDown),
+                (11.8, OptDown),
+                (11.9, OptDown),
+                (12.0, OptDown),
+                (12.1, OptDown),
+                (12.2, OptDown),
+                (12.26, Shot("opt-scrolling")),
+                (12.9, Shot("opt-scrolled-bottom")),
+                (13.1, Quit),
             ]
         } else {
             steps
@@ -367,7 +380,22 @@ impl Demo {
     }
 }
 
-const OPT_ROWS: [&str; 8] = ["UI Sounds", "Sound Volume", "Turntable", "Animations", "Fullscreen", "Default Phone", "Log Text Size", "Restore Defaults"];
+const OPT_ROWS: [&str; 12] = [
+    "UI Sounds",
+    "Sound Volume",
+    "Turntable",
+    "Animations",
+    "Fullscreen",
+    "Default Phone",
+    "Log Text Size",
+    "Command Count",
+    "Description",
+    "Tags",
+    "Hotkey Hints",
+    "Restore Defaults",
+];
+/// index of the last row, "Restore Defaults"
+const OPT_RESTORE: usize = OPT_ROWS.len() - 1;
 
 impl App {
     fn now(&self) -> f64 {
@@ -637,6 +665,20 @@ impl App {
                 sp.update(dt, 17.0 + 30.0 * (lag - 0.5).max(0.0));
             }
             st.dot.update(dt, 14.0);
+        }
+        // the Options list scrolls to keep the selected row in view
+        {
+            let h = self.ui.h - 100.0 - FOOTER_H - 14.0;
+            let visible = (((h - 22.0 - 44.0) / 52.0).floor() as usize).max(1);
+            let mut top = self.opt_top.target.round() as usize;
+            if self.opt_sel < top {
+                top = self.opt_sel;
+            } else if self.opt_sel >= top + visible {
+                top = self.opt_sel + 1 - visible;
+            }
+            top = top.min(OPT_ROWS.len().saturating_sub(visible));
+            self.opt_top.target = top as f32;
+            self.opt_top.update(dt, 20.0);
         }
         // the Options scrollbar marker glides between rows
         let rows = OPT_ROWS.len();
@@ -1131,12 +1173,12 @@ impl App {
                 if i != self.opt_sel {
                     self.opt_sel = i;
                     self.fx(Fx::Tick);
-                } else if i == 7 {
+                } else if i == OPT_RESTORE {
                     d = 1;
                 }
             }
         }
-        if (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter)) && self.opt_sel == 7 {
+        if (is_key_pressed(KeyCode::Enter) || is_key_pressed(KeyCode::KpEnter)) && self.opt_sel == OPT_RESTORE {
             d = 1;
         }
         if d != 0 {
@@ -1161,6 +1203,10 @@ impl App {
             }
             5 => o.phone = ((o.phone as i32 + d).rem_euclid(3)) as u8,
             6 => o.log_size = (o.log_size as i32 + d).clamp(12, 24) as u8,
+            7 => o.show_count = !o.show_count,
+            8 => o.show_desc = !o.show_desc,
+            9 => o.show_tags = !o.show_tags,
+            10 => o.show_hints = !o.show_hints,
             _ => {
                 self.dialog = Some(Dialog::Confirm { text: "Restore every option to its default?".into(), yes: false, action: DAction::ResetOptions, opened: self.ui.t });
                 self.fx(Fx::Accept);
@@ -1430,16 +1476,16 @@ impl App {
         let i = self.main_strip.sel;
         let tool = &self.tools[i];
         let y = STRIP_Y + STRIP_H + 76.0;
-        ui.text_sh(tool.blurb, ui.w * 0.5, y, 22.0, TXT, Align::Center);
-        let info = if !self.installed[i] {
-            format!("{} is not installed", tool.needs)
-        } else if tool.cmds.len() == 1 {
-            String::new()
-        } else {
-            format!("{} commands inside", tool.cmds.len())
-        };
-        if !info.is_empty() {
-            ui.text_sh(&info, ui.w * 0.5, y + 28.0, 17.0, if self.installed[i] { TXT_DIM } else { RED }, Align::Center);
+        let mut ly = y;
+        if self.opts.show_desc {
+            ui.text_sh(tool.blurb, ui.w * 0.5, ly, 22.0, TXT, Align::Center);
+            ly += 28.0;
+        }
+        // "not installed" always shows: it explains why Enter does nothing
+        if !self.installed[i] {
+            ui.text_sh(&format!("{} is not installed", tool.needs), ui.w * 0.5, ly, 17.0, RED, Align::Center);
+        } else if self.opts.show_count && tool.cmds.len() > 1 {
+            ui.text_sh(&format!("{} commands inside", tool.cmds.len()), ui.w * 0.5, ly, 17.0, TXT_DIM, Align::Center);
         }
     }
 
@@ -1467,9 +1513,12 @@ impl App {
         let ui = &self.ui;
         let cmd = &tool.cmds[self.tool_strips[ti].sel];
         let y = STRIP_Y + STRIP_H + 76.0;
-        let desc = ui.fit(cmd.desc, 22.0, ui.w - 120.0);
-        ui.text_sh(&desc, ui.w * 0.5, y, 22.0, TXT, Align::Center);
-        let tags = catalog::tags(cmd);
+        if self.opts.show_desc {
+            let desc = ui.fit(cmd.desc, 22.0, ui.w - 120.0);
+            ui.text_sh(&desc, ui.w * 0.5, y, 22.0, TXT, Align::Center);
+        }
+        let tags = if self.opts.show_tags { catalog::tags(cmd) } else { Vec::new() };
+        let y = if self.opts.show_desc { y } else { y - 30.0 };
         if !tags.is_empty() {
             let widths: f32 = tags.iter().map(|t| ui.measure_with(&ui.black, t, 14.0) + 26.0).sum();
             let mut x = ui.w * 0.5 - widths * 0.5;
@@ -1642,10 +1691,22 @@ impl App {
         let o = &self.opts;
         let row_h = 52.0;
         let vx = x + w * 0.58; // value column
+        // the list scrolls when it is taller than the panel
+        let list_top = y + 22.0;
+        let list_h = h - 22.0 - 44.0;
+        let visible = ((list_h / row_h).floor() as usize).max(1);
+        let top = self.opt_top.value;
         let mut rows = Vec::new();
         let (mut rp, mut rn) = (None, None);
         for (i, name) in OPT_ROWS.iter().enumerate() {
-            let ry = y + 22.0 + i as f32 * row_h;
+            let pos = i as f32 - top;
+            // rows fade out as they slide past the top or bottom edge
+            let fade = (pos + 0.9).clamp(0.0, 1.0) * (visible as f32 - pos + 0.1).clamp(0.0, 1.0);
+            if fade <= 0.02 {
+                continue;
+            }
+            let ui = &self.ui.faded(fade);
+            let ry = list_top + pos * row_h;
             let sel = i == self.opt_sel;
             let rr = Rect::new(x + 18.0, ry, w - 36.0 - 40.0, row_h - 6.0);
             if sel {
@@ -1668,6 +1729,10 @@ impl App {
                 2 => Some(if o.spin { "Spin" } else { "Still" }.into()),
                 3 => Some(if o.anim_full { "Full" } else { "Quick" }.into()),
                 4 => Some(if o.fullscreen { "On" } else { "Off" }.into()),
+                7 => Some(if o.show_count { "On" } else { "Off" }.into()),
+                8 => Some(if o.show_desc { "On" } else { "Off" }.into()),
+                9 => Some(if o.show_tags { "On" } else { "Off" }.into()),
+                10 => Some(if o.show_hints { "On" } else { "Off" }.into()),
                 5 => Some(Phone::from_index(o.phone).label().into()),
                 6 => {
                     slider((o.log_size - 12) as f32, 12.0);
@@ -1692,7 +1757,9 @@ impl App {
                 rp = Some(lp);
                 rn = Some(np);
             }
-            rows.push((rr, i));
+            if fade > 0.6 {
+                rows.push((rr, i));
+            }
         }
         // decorative scrollbar, like the original list screens
         let sbx = x + w - 28.0;
@@ -1876,7 +1943,8 @@ impl App {
             let y = y_top + row * (bh + gy);
             let r = Rect::new(x, y, bw, bh);
             let accent = b.act == FAct::TunerPill(4) && self.tuner.dirty();
-            ui.button(b.key, x, y, bw, bh, &b.label, b.hint, hit(&r, m) || accent);
+            let hint = if self.opts.show_hints { b.hint } else { "" };
+            ui.button(b.key, x, y, bw, bh, &b.label, hint, hit(&r, m) || accent);
             hits.push((r, b.key, b.act));
         }
         self.hits.footer = hits;
@@ -2092,10 +2160,16 @@ async fn main() {
         demo: std::env::var("GARAGE_DEMO").ok().map(Demo::new),
         warm_k: -1.0,
         opt_dot: Spring::new(0.0),
+        opt_top: Spring::new(0.0),
     };
     if let Some(d) = app.demo.as_ref() {
         let _ = std::fs::create_dir_all(&d.dir);
         app.opts.sound = false;
+        // GitHub screenshots: clean, like the game (all four switches off)
+        app.opts.show_count = false;
+        app.opts.show_desc = false;
+        app.opts.show_tags = false;
+        app.opts.show_hints = false;
     }
 
     loop {

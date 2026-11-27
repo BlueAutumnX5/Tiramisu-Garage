@@ -18,11 +18,19 @@ pub struct Options {
     /// adb serial of the vivo, for the phone picker over USB (optional:
     /// without it the picker matches any adb device whose model says vivo)
     pub vivo_serial: String,
+    /// "N commands inside" under a tool on the main menu
+    pub show_count: bool,
+    /// the description line under the selected item
+    pub show_desc: bool,
+    /// coloured tags (KONSOLE, APP, BUILT-IN, ASKS FIRST, PHONE PICKER)
+    pub show_tags: bool,
+    /// hotkey labels (ENTER, ESC, ...) inside the footer buttons
+    pub show_hints: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Options { sound: true, volume: 6, spin: true, anim_full: true, fullscreen: false, phone: 0, log_size: 16, vivo_serial: String::new() }
+        Options { sound: true, volume: 6, spin: true, anim_full: true, fullscreen: false, phone: 0, log_size: 16, vivo_serial: String::new(), show_count: false, show_desc: false, show_tags: false, show_hints: false }
     }
 }
 
@@ -50,6 +58,10 @@ impl Options {
                 "fullscreen" => o.fullscreen = b,
                 "phone" => o.phone = n.unwrap_or(0).min(2),
                 "log_size" => o.log_size = n.unwrap_or(16).clamp(12, 24),
+                "show_count" => o.show_count = b,
+                "show_desc" => o.show_desc = b,
+                "show_tags" => o.show_tags = b,
+                "show_hints" => o.show_hints = b,
                 "vivo_serial" => o.vivo_serial = v.chars().filter(|c| c.is_ascii_alphanumeric() || ".:-_".contains(*c)).collect(),
                 _ => {}
             }
@@ -63,8 +75,8 @@ impl Options {
             let _ = std::fs::create_dir_all(dir);
         }
         let text = format!(
-            "# Tiramisu Garage options (written by the app)\nsound={}\nvolume={}\nspin={}\nanim_full={}\nfullscreen={}\nphone={}\nlog_size={}\nvivo_serial={}\n",
-            self.sound as u8, self.volume, self.spin as u8, self.anim_full as u8, self.fullscreen as u8, self.phone, self.log_size, self.vivo_serial
+            "# Tiramisu Garage options (written by the app)\nsound={}\nvolume={}\nspin={}\nanim_full={}\nfullscreen={}\nphone={}\nlog_size={}\nvivo_serial={}\nshow_count={}\nshow_desc={}\nshow_tags={}\nshow_hints={}\n",
+            self.sound as u8, self.volume, self.spin as u8, self.anim_full as u8, self.fullscreen as u8, self.phone, self.log_size, self.vivo_serial, self.show_count as u8, self.show_desc as u8, self.show_tags as u8, self.show_hints as u8
         );
         let _ = std::fs::write(p, text);
     }
