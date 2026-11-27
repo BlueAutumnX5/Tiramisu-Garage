@@ -7,4 +7,6 @@ Exec=tiramisu-garage
 Icon=tiramisu-garage
 Terminal=false
 Categories=System;
-Keywords=safe-update;phone-doctor;battcheck;fan;dyno;hotspot;rescue;
+Keywords=safe-update;phone-doctor;battcheck;fan;dyno;tuner;hotspot;rescue;
+StartupWMClass=tiramisu-garage
+StartupNotify=true

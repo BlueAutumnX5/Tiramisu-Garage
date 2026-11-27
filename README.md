@@ -37,6 +37,9 @@ uses no game assets.
 - **Live Dyno:** fan RPM tachometer, CPU temperature gauge with the fan-kick
   threshold, EC modes and a 3-minute history. It is read-only and samples once
   a second.
+- **Footer buttons** like the game's: long rounded bars in a two-row grid that
+  fills from the right; they glide to lime over 250 ms on hover, click or hotkey.
+  Arrow buttons pop on press and grey out when there is nothing left that way.
 - **Options:** the list panel with values: sounds, volume, turntable, animation
   speed, fullscreen, default phone, log text size.
 
@@ -70,11 +73,12 @@ Enter apply, H help.
 ## Build and install
 
 ```bash
-cargo build --release
-install -m755 target/release/tiramisu-garage ~/.local/bin/
-install -m644 packaging/tiramisu-garage.desktop ~/.local/share/applications/
-install -m644 packaging/tiramisu-garage.svg ~/.local/share/icons/hicolor/scalable/apps/
+sh packaging/install.sh
 ```
+
+That builds the release binary, puts it in `~/.local/bin`, adds **Tiramisu Garage** to
+the Start Menu (System), and installs the icon at every size. The window carries the
+same icon and the class `tiramisu-garage`, so the taskbar groups it under the menu entry.
 
 It needs Linux with X11 or XWayland, plus `script` (util-linux), `konsole`,
 `kdialog`, `busctl` and `pkexec` for the respective features. The Fan Curve

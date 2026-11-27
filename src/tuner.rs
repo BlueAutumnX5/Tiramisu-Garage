@@ -59,7 +59,7 @@ pub struct Tuner {
     // hit boxes from the last frame
     plot: Rect,
     tiles: [Rect; 2],
-    pills: Vec<(Rect, usize)>,
+    arrows: [Rect; 2],
 }
 
 fn base_at(c: &Curve, n: usize) -> i32 {
@@ -80,7 +80,6 @@ fn range_text(c: &Curve, n: usize) -> String {
     }
 }
 
-const PILLS: [&str; 5] = ["Link GPU", "Preset", "Revert", "Reset", "Apply"];
 
 impl Tuner {
     pub fn new() -> Tuner {
@@ -101,7 +100,7 @@ impl Tuner {
             changed_at: -10.0,
             plot: Rect::default(),
             tiles: [Rect::default(); 2],
-            pills: Vec::new(),
+            arrows: [Rect::default(); 2],
         }
     }
 
@@ -246,7 +245,19 @@ impl Tuner {
         self.linked = self.saved[0] == self.saved[1];
     }
 
-    fn pill_action(&mut self, i: usize, ev: &mut Vec<TEvent>) {
+    /// Flip between the CPU and GPU tables; the arrow on that side pops.
+    pub fn toggle_tab(&mut self, ui: &Ui, now: f64) {
+        let to = 1 - self.tab;
+        ui.press(if to == 0 { "tab_l" } else { "tab_r" });
+        self.switch_tab(to, now);
+    }
+
+    pub fn linked(&self) -> bool {
+        self.linked
+    }
+
+    /// 0 link, 1 next preset, 2 revert, 3 factory default, 4 apply.
+    pub fn pill_action(&mut self, i: usize, ev: &mut Vec<TEvent>) {
         use crate::sound::Fx;
         match i {
             0 => {
@@ -353,7 +364,7 @@ impl Tuner {
             }
         }
         if is_key_pressed(KeyCode::Tab) {
-            self.switch_tab(1 - self.tab, now);
+            self.toggle_tab(ui, now);
             ev.push(TEvent::Sound(Fx::Whoosh));
         }
         if is_key_pressed(KeyCode::L) {
@@ -397,9 +408,17 @@ impl Tuner {
                     ev.push(TEvent::Sound(Fx::Whoosh));
                 }
             }
-            if let Some(&(_, i)) = self.pills.iter().find(|(r, _)| hit(r, m)) {
-                self.pill_action(i, &mut ev);
-            } else if editable {
+            let arrows = self.arrows;
+            for (i, r) in arrows.iter().enumerate() {
+                if hit(r, m) {
+                    ui.press(if i == 0 { "tab_l" } else { "tab_r" });
+                    if self.tab != i {
+                        self.switch_tab(i, now);
+                        ev.push(TEvent::Sound(Fx::Whoosh));
+                    }
+                }
+            }
+            if editable {
                 if let Some(li) = label_at(m) {
                     self.drag_label = Some((li, m.x, self.cur().t[li]));
                 } else if let Some(n) = col_at(m) {
@@ -474,8 +493,12 @@ impl Tuner {
         // table selector: CPU / GPU tiles in a strip
         let (sy, sh) = (90.0, 62.0);
         ui.rrect_grad(24.0, sy, ui.w - 48.0, sh, 12.0, Color::new(0.62, 0.65, 0.65, 0.40), Color::new(0.45, 0.48, 0.48, 0.38));
-        ui.circle_arrow(58.0, sy + sh * 0.5, 17.0, -1, false);
-        ui.circle_arrow(ui.w - 58.0, sy + sh * 0.5, 17.0, 1, false);
+        let m = ui.mouse();
+        let la = Rect::new(58.0 - 18.0, sy + sh * 0.5 - 18.0, 36.0, 36.0);
+        let ra = Rect::new(ui.w - 58.0 - 18.0, sy + sh * 0.5 - 18.0, 36.0, 36.0);
+        ui.arrow_btn("tab_l", 58.0, sy + sh * 0.5, 17.0, -1, hit(&la, m), self.tab == 1);
+        ui.arrow_btn("tab_r", ui.w - 58.0, sy + sh * 0.5, 17.0, 1, hit(&ra, m), self.tab == 0);
+        self.arrows = [la, ra];
         let pulse = 0.5 + 0.5 * ((now - self.changed_at) as f32 * std::f32::consts::TAU / 1.25).cos();
         let labels = [('\u{F0EE0}', "CPU  ·  table 1"), ('\u{F08AE}', "GPU  ·  table 2")];
         for (i, (g, l)) in labels.iter().enumerate() {
@@ -498,7 +521,7 @@ impl Tuner {
         let px0 = 96.0;
         let px1 = ui.w - 96.0;
         let py0 = 178.0;
-        let py1 = ui.h - 212.0;
+        let py1 = ui.h - 170.0;
         let p = Rect::new(px0, py0, px1 - px0, py1 - py0);
         self.plot = p;
         let cw = p.w / N_SPEEDS as f32;
@@ -604,7 +627,7 @@ impl Tuner {
         let tune = c.s[n];
         let base = base_at(&c, n);
         let delta = tune - base;
-        let ry = py1 + 76.0;
+        let ry = py1 + 70.0;
         let main = format!("{}:   {}%   (about {} RPM)", range_text(&c, n), tune, tune * RPM_PER_PCT);
         let w0 = ui.text_sh(&main, px0, ry, 22.0, TXT, Align::Left);
         if delta != 0 {
@@ -615,7 +638,7 @@ impl Tuner {
         if self.busy() {
             sx -= ui.text_sh("working…", sx, ry, 20.0, AMBER, Align::Right) + 18.0;
         } else if self.dirty() {
-            sx -= ui.text_sh("UNSAVED: Enter applies", sx, ry, 20.0, AMBER, Align::Right) + 18.0;
+            sx -= ui.text_sh("UNSAVED: press Apply", sx, ry, 20.0, AMBER, Align::Right) + 18.0;
         }
         if tele.boost == "on" {
             sx -= ui.chip(sx - 110.0, ry - 7.0, "BOOST ON", LIME) + 10.0;
@@ -624,31 +647,6 @@ impl Tuner {
             ui.chip(sx - 270.0, ry - 7.0, "FAN MODE AUTO: F fixes it", RED);
         }
 
-        // ---- action pills (with their keys)
-        let names = [
-            if self.linked { "Linked: L" } else { "Unlinked: L" },
-            "Preset: P",
-            "Revert: R",
-            "Reset: D",
-            "Apply: Enter",
-        ];
-        let _ = PILLS;
-        let pw = 168.0;
-        let gap = 12.0;
-        let total = pw * names.len() as f32 + gap * (names.len() - 1) as f32;
-        let mut x = ui.w * 0.5 - total * 0.5;
-        let y = py1 + 92.0;
-        self.pills.clear();
-        let m = ui.mouse();
-        for (i, name) in names.iter().enumerate() {
-            let r = Rect::new(x, y, pw, 30.0);
-            let r = ui.pill(r.x, r.y, r.w, name, hit(&r, m) || (i == 4 && self.dirty()));
-            self.pills.push((r, i));
-            x += pw + gap;
-        }
-        let pname = PRESETS[self.preset].0;
-        ui.text(&format!("next preset: {}", PRESETS[(self.preset + 1) % PRESETS.len()].0), self.pills[1].0.x + pw * 0.5, y + 46.0, 13.0, TXT_DIM, Align::Center);
-        let _ = pname;
     }
 }
 

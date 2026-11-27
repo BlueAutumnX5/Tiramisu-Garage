@@ -332,7 +332,7 @@ fn gauge(ui: &Ui, cx: f32, cy: f32, r: f32, v: f32, lo: f32, hi: f32, red_from: 
     let (s, c) = av.sin_cos();
     ui.line(cx - c * 18.0, cy - s * 18.0, cx + c * nl, cy + s * nl, 7.0, Color::new(1.0, 0.3, 0.15, 0.25));
     ui.line(cx - c * 18.0, cy - s * 18.0, cx + c * nl, cy + s * nl, 3.5, Color::new(1.0, 0.42, 0.22, 1.0));
-    ui.glow(cx, cy, 34.0, Color::new(1.0, 0.4, 0.2, 0.35));
+    ui.glow_soft(cx, cy, 34.0, Color::new(1.0, 0.4, 0.2, 0.35));
     ui.disc(cx, cy, 13.0, Color::new(0.12, 0.13, 0.14, 1.0));
     ui.arc(cx, cy, 11.0, 13.0, 0.0, 2.0 * PI, Color::new(0.8, 0.82, 0.84, 1.0));
 

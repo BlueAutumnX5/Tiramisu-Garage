@@ -35,6 +35,17 @@ const STRIP_Y: f32 = 94.0;
 const STRIP_H: f32 = 150.0;
 
 fn window_conf() -> Conf {
+    // Window icon for the taskbar / Alt+Tab, rendered from
+    // packaging/tiramisu-garage.svg (raw RGBA, 16/32/64 px).
+    let icon = macroquad::miniquad::conf::Icon {
+        small: *include_bytes!("../assets/icon-16.rgba"),
+        medium: *include_bytes!("../assets/icon-32.rgba"),
+        big: *include_bytes!("../assets/icon-64.rgba"),
+    };
+    let mut platform = macroquad::miniquad::conf::Platform::default();
+    // miniquad's default class is "miniquad-application"; KDE matches the
+    // window to tiramisu-garage.desktop (StartupWMClass) through this.
+    platform.linux_wm_class = "tiramisu-garage";
     Conf {
         window_title: "Tiramisu Garage".to_owned(),
         window_width: 1280,
@@ -42,6 +53,8 @@ fn window_conf() -> Conf {
         window_resizable: true,
         sample_count: 4,
         high_dpi: false,
+        icon: Some(icon),
+        platform,
         ..Default::default()
     }
 }
@@ -129,13 +142,44 @@ enum Dialog {
     Message { text: String, opened: f64 },
 }
 
+/// What a footer button does when clicked.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum FAct {
+    Select,
+    Quit,
+    Back,
+    LastLog,
+    PhoneNext,
+    SendAnswer,
+    Stop,
+    RunAgain,
+    CopyLog,
+    OpenTuner,
+    TunerPill(usize),
+    TunerHelp,
+    TunerTab,
+    RestoreDefaults,
+}
+
+/// One footer button: animation key, label, hotkey hint, hotkey, action.
+struct FBtn {
+    key: &'static str,
+    label: String,
+    hint: &'static str,
+    keys: &'static [KeyCode],
+    act: FAct,
+}
+
+fn fb(key: &'static str, label: impl Into<String>, hint: &'static str, keys: &'static [KeyCode], act: FAct) -> FBtn {
+    FBtn { key, label: label.into(), hint, keys, act }
+}
+
 #[derive(Default)]
 struct Hits {
     items: Vec<(Rect, usize)>,
     prev: Option<Rect>,
     next: Option<Rect>,
-    back: Option<Rect>,
-    quit: Option<Rect>,
+    footer: Vec<(Rect, &'static str, FAct)>,
     cyc_prev: Option<Rect>,
     cyc_next: Option<Rect>,
     dlg_yes: Option<Rect>,
@@ -180,6 +224,10 @@ struct App {
     /// screenshot file to write after this frame is drawn
     shot: Option<String>,
     demo: Option<Demo>,
+    /// window scale the font cache was warmed for
+    warm_k: f32,
+    /// Options scrollbar marker, gliding between rows
+    opt_dot: Spring,
 }
 
 /// Scripted walk through every screen, saving a PNG at each stop.
@@ -199,6 +247,10 @@ enum DStep {
     TunerTab,
     TunerHelp,
     TunerEsc,
+    /// start auto-repeating Left (-1) / Right (+1) like a held key; 0 releases
+    Hold(i32),
+    /// Options screen: like pressing Down
+    OptDown,
     Quit,
 }
 
@@ -207,6 +259,12 @@ struct Demo {
     t0: f64,
     i: usize,
     steps: Vec<(f64, DStep)>,
+    /// (direction, last step time) while a key is "held"
+    hold: Option<(i32, f64)>,
+    /// frame times (s) recorded while holding
+    frames: Vec<f32>,
+    /// carousel position (slots) each frame while holding
+    scrolls: Vec<(i64, f32)>,
 }
 
 impl Demo {
@@ -276,7 +334,34 @@ impl Demo {
             (30.7, Shot("19-options")),
             (30.9, Quit),
         ];
-        Demo { dir, t0: -1.0, i: 0, steps }
+        let steps = if std::env::var("GARAGE_DEMO_HOLD").is_ok() {
+            // hold-key stress test: hold Right, then Left, on the main menu and in Phone Doctor
+            vec![
+                (1.0, Hold(1)),
+                (2.2, Hold(-1)),
+                (3.4, Hold(1)),
+                (4.2, Hold(0)),
+                (4.6, Shot("hold-main")),
+                (4.8, Tool(2)),
+                (5.0, Enter),
+                (5.8, Hold(1)),
+                (7.0, Hold(-1)),
+                (8.0, Hold(0)),
+                (8.4, Shot("hold-tool")),
+                (8.6, Back),
+                (9.1, Tool(11)),
+                (9.4, Enter),
+                (10.2, OptDown),
+                (10.25, Shot("opt-arrow-flash")),
+                (10.6, OptDown),
+                (10.64, Shot("opt-dot-gliding")),
+                (11.2, Shot("opt-settled")),
+                (11.4, Quit),
+            ]
+        } else {
+            steps
+        };
+        Demo { dir, t0: -1.0, i: 0, steps, hold: None, frames: Vec::new(), scrolls: Vec::new() }
     }
 }
 
@@ -285,6 +370,45 @@ const OPT_ROWS: [&str; 8] = ["UI Sounds", "Sound Volume", "Turntable", "Animatio
 impl App {
     fn now(&self) -> f64 {
         self.ui.t
+    }
+
+    /// Rasterise every glyph the menus use, at the sizes they use, so no
+    /// frame ever stalls on first-time glyph drawing. Re-run when the
+    /// window scale changes.
+    fn prewarm(&mut self) {
+        let k = self.ui.k;
+        if (k - self.warm_k).abs() < 1e-3 {
+            return;
+        }
+        self.warm_k = k;
+        let mut text: Vec<char> = (32u8..127).map(|b| b as char).collect();
+        let mut icons: Vec<char> = Vec::new();
+        for t in &self.tools {
+            text.extend(t.name.chars().chain(t.blurb.chars()));
+            icons.push(t.glyph);
+            for c in &t.cmds {
+                text.extend(c.label.chars().chain(c.desc.chars()));
+                icons.push(c.glyph);
+            }
+        }
+        text.extend("°·…—–".chars());
+        text.sort_unstable();
+        text.dedup();
+        icons.sort_unstable();
+        icons.dedup();
+        let fs = |size: f32| (size * k).round().clamp(4.0, 400.0) as u16;
+        for size in [46.0, 38.0, 32.0, 24.0, 22.0, 20.0, 19.0, 18.0, 17.0, 16.0, 15.0] {
+            self.ui.font.populate_font_cache(&text, fs(size));
+        }
+        for size in [24.0, 22.0, 15.0, 14.0] {
+            self.ui.black.populate_font_cache(&text, fs(size));
+        }
+        // icon glyphs: every 8 px base size an animated icon can round up to
+        let mut bases: Vec<u16> = (40..=110).map(|s| ((s as f32 * k / 8.0).ceil() * 8.0).min(400.0) as u16).collect();
+        bases.dedup();
+        for b in bases {
+            self.ui.font.populate_font_cache(&icons, b);
+        }
     }
 
     fn save_opts(&self) {
@@ -304,6 +428,21 @@ impl App {
         if el > until {
             self.quit = true;
         }
+        if let Some((d, last)) = demo.hold {
+            demo.frames.push(get_frame_time());
+            let (id, pos) = match self.stack.last() {
+                Some(Screen::Main) => (-1, self.main_strip.scroll.value),
+                Some(Screen::Tool(i)) => (*i as i64, self.tool_strips[*i].scroll.value),
+                _ => (-9, 0.0),
+            };
+            let demo = self.demo.as_mut().unwrap();
+            demo.scrolls.push((id, pos));
+            if now - last >= 0.075 {
+                demo.hold = Some((d, now));
+                self.move_sel(d);
+            }
+        }
+        let Some(demo) = self.demo.as_mut() else { return };
         let mut todo = Vec::new();
         while demo.i < demo.steps.len() && demo.steps[demo.i].0 <= el {
             todo.push(demo.steps[demo.i].1);
@@ -341,7 +480,29 @@ impl App {
                 DStep::TunerTab => self.tuner.demo_tab(now),
                 DStep::TunerHelp => self.dialog = Some(Dialog::Message { text: tuner::HELP.into(), opened: now }),
                 DStep::TunerEsc => self.back(),
-                DStep::Quit => self.quit = true,
+                DStep::OptDown => {
+                    self.opt_sel = (self.opt_sel + 1) % OPT_ROWS.len();
+                    self.ui.press("sb_down");
+                }
+                DStep::Hold(d) => {
+                    if let Some(demo) = self.demo.as_mut() {
+                        demo.hold = if d == 0 { None } else { Some((d, now - 1.0)) };
+                    }
+                }
+                DStep::Quit => {
+                    if let Some(demo) = self.demo.as_ref() {
+                        let mut f: Vec<f32> = demo.frames.iter().map(|x| x * 1000.0).collect();
+                        if !f.is_empty() {
+                            f.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                            let avg = f.iter().sum::<f32>() / f.len() as f32;
+                            let p95 = f[(f.len() as f32 * 0.95) as usize];
+                            let slow = f.iter().filter(|&&x| x > 25.0).count();
+                            let jump = demo.scrolls.windows(2).filter(|w| w[0].0 == w[1].0 && w[0].0 != -9).map(|w| (w[1].1 - w[0].1).abs()).fold(0.0f32, f32::max);
+                            eprintln!("HOLD-STATS frames={} avg={avg:.1}ms p95={p95:.1}ms max={:.1}ms over25ms={slow} max_jump_per_frame={jump:.3}slot", f.len(), f[f.len() - 1]);
+                        }
+                    }
+                    self.quit = true
+                }
             }
         }
     }
@@ -444,6 +605,10 @@ impl App {
         let Some(st) = self.strip_mut(s) else { return };
         let new = (st.sel as i32 + delta).clamp(0, n - 1) as usize;
         if new != st.sel {
+            self.ui.press(if delta < 0 { "strip_l" } else { "strip_r" });
+        }
+        let Some(st) = self.strip_mut(s) else { return };
+        if new != st.sel {
             st.sel = new;
             st.changed_at = now;
             self.fx(Fx::Tick);
@@ -462,10 +627,19 @@ impl App {
             st.scroll.target = target;
             st.boxpos.target = st.sel as f32 - target;
             st.dot.target = if n > 1 { st.sel as f32 / (n - 1) as f32 } else { 0.5 };
-            st.scroll.update(dt, 17.0);
-            st.boxpos.update(dt, 17.0);
+            // The further the carousel is behind (spamming or holding an
+            // arrow), the stiffer its spring: it catches up quickly but
+            // always glides. (Snapping it closer made icons teleport.)
+            for sp in [&mut st.scroll, &mut st.boxpos] {
+                let lag = (sp.target - sp.value).abs();
+                sp.update(dt, 17.0 + 30.0 * (lag - 0.5).max(0.0));
+            }
             st.dot.update(dt, 14.0);
         }
+        // the Options scrollbar marker glides between rows
+        let rows = OPT_ROWS.len();
+        self.opt_dot.target = self.opt_sel as f32 / (rows - 1) as f32;
+        self.opt_dot.update(dt, 18.0);
     }
 
     // ------------------------------------------------------------------ running
@@ -641,13 +815,19 @@ impl App {
         if self.pending_nav.is_some() {
             return;
         }
-        if self.clicked(&self.hits.quit.clone()) {
-            self.ask_quit();
-            return;
+        // hotkeys light up their footer button
+        for b in self.footer_buttons() {
+            if b.keys.iter().any(|&k| is_key_pressed(k)) {
+                self.ui.press(b.key);
+            }
         }
-        if self.clicked(&self.hits.back.clone()) {
-            self.back();
-            return;
+        if is_mouse_button_pressed(MouseButton::Left) {
+            let m = self.ui.mouse();
+            if let Some((_, key, act)) = self.hits.footer.iter().find(|(r, _, _)| hit(r, m)).cloned() {
+                self.ui.press(key);
+                self.footer_act(act);
+                return;
+            }
         }
         match self.screen() {
             Screen::Main | Screen::Tool(_) => self.strip_input(),
@@ -781,6 +961,7 @@ impl App {
                     d = 1;
                 }
                 if d != 0 {
+                    self.ui.press(if d < 0 { "cyc_l" } else { "cyc_r" });
                     self.opts.phone = ((self.opts.phone as i32 + d).rem_euclid(3)) as u8;
                     self.save_opts();
                     self.fx(Fx::Tick);
@@ -847,6 +1028,7 @@ impl App {
             scroll += page;
         }
         if scroll != 0.0 {
+            self.ui.press(if scroll < 0.0 { "sb_up" } else { "sb_down" });
             self.log_scroll += scroll;
             self.log_follow = false;
         }
@@ -916,13 +1098,23 @@ impl App {
 
     fn options_input(&mut self) {
         let n = OPT_ROWS.len();
-        if self.rep_pressed(KeyCode::Up) {
-            self.opt_sel = (self.opt_sel + n - 1) % n;
-            self.fx(Fx::Tick);
+        if self.rep_pressed(KeyCode::Up) || self.clicked(&self.hits.log_up.clone()) {
+            if self.opt_sel > 0 {
+                self.opt_sel -= 1;
+                self.ui.press("sb_up");
+                self.fx(Fx::Tick);
+            } else {
+                self.fx(Fx::Error);
+            }
         }
-        if self.rep_pressed(KeyCode::Down) {
-            self.opt_sel = (self.opt_sel + 1) % n;
-            self.fx(Fx::Tick);
+        if self.rep_pressed(KeyCode::Down) || self.clicked(&self.hits.log_down.clone()) {
+            if self.opt_sel + 1 < n {
+                self.opt_sel += 1;
+                self.ui.press("sb_down");
+                self.fx(Fx::Tick);
+            } else {
+                self.fx(Fx::Error);
+            }
         }
         let mut d = 0i32;
         if self.rep_pressed(KeyCode::Left) || self.clicked(&self.hits.row_prev.clone()) {
@@ -946,6 +1138,7 @@ impl App {
             d = 1;
         }
         if d != 0 {
+            self.ui.press(if d < 0 { "row_l" } else { "row_r" });
             self.change_option(d);
         }
         if is_key_pressed(KeyCode::Escape) || is_key_pressed(KeyCode::Backspace) {
@@ -1163,7 +1356,7 @@ impl App {
         let (tx0, tx1, ty) = (24.0, w - 24.0, 74.0);
         ui.rrect(tx0, ty, tx1 - tx0, 9.0, 4.5, Color::new(0.65, 0.68, 0.68, 0.30));
         let dx = tx0 + 10.0 + (tx1 - tx0 - 20.0) * st.dot.value;
-        ui.glow(dx, ty + 4.5, 12.0, Color::new(1.0, 1.0, 1.0, 0.45));
+        ui.glow_soft(dx, ty + 4.5, 12.0, Color::new(1.0, 1.0, 1.0, 0.45));
         ui.disc(dx, ty + 4.5, 4.2, TXT);
 
         // the strip
@@ -1172,8 +1365,8 @@ impl App {
         let cy = STRIP_Y + STRIP_H * 0.5;
         let lp = Rect::new(24.0 + 40.0 - 22.0, cy - 22.0, 44.0, 44.0);
         let rp = Rect::new(w - 24.0 - 40.0 - 22.0, cy - 22.0, 44.0, 44.0);
-        ui.circle_arrow(lp.x + 22.0, cy, 21.0, -1, self.hovered(&lp));
-        ui.circle_arrow(rp.x + 22.0, cy, 21.0, 1, self.hovered(&rp));
+        ui.arrow_btn("strip_l", lp.x + 22.0, cy, 21.0, -1, self.hovered(&lp), st.sel > 0);
+        ui.arrow_btn("strip_r", rp.x + 22.0, cy, 21.0, 1, self.hovered(&rp), st.sel + 1 < n);
 
         let cxm = w * 0.5;
         let (x0, x1) = (24.0 + 60.0, w - 24.0 - 60.0);
@@ -1182,7 +1375,7 @@ impl App {
 
         // selection box: slides, its lime rim pulses, and it flashes on change
         let bx = cxm + st.boxpos.value * SLOT;
-        let (bw, bh) = (178.0, 128.0);
+        let (bw, bh) = (204.0, 116.0); // wide like the original, not square
         let pulse = 0.5 + 0.5 * ((now - st.changed_at) as f32 * std::f32::consts::TAU / 1.25).cos();
         let rim = hl * (0.30 + 0.70 * pulse);
         ui.rrect(bx - bw * 0.5, cy - bh * 0.5, bw, bh, 14.0, Color::new(0.10, 0.11, 0.11, 0.66));
@@ -1204,7 +1397,7 @@ impl App {
             }
             let selected = i == st.sel;
             let pop = if selected { 1.0 + 0.13 * (-since * 11.0).exp() } else { 1.0 };
-            let size = if selected { 92.0 } else { 76.0 } * pop * (1.0 - 0.14 * smooth(1.0, 2.0, d.abs() as f64));
+            let size = if selected { 84.0 } else { 70.0 } * pop * (1.0 - 0.14 * smooth(1.0, 2.0, d.abs() as f64));
             let base = if it.dim { 0.32 } else if selected { 1.0 } else { 0.80 };
             let mut col = Color::new(0.95, 0.96, 0.96, base * fade);
             if selected && !it.dim {
@@ -1260,8 +1453,8 @@ impl App {
             let lx = rx - 34.0 - tw - 34.0;
             let rp = Rect::new(rx - 16.0, 26.0, 32.0, 32.0);
             let lp = Rect::new(lx - 16.0, 26.0, 32.0, 32.0);
-            ui.circle_arrow(lx, 42.0, 15.0, -1, self.hovered(&lp));
-            ui.circle_arrow(rx, 42.0, 15.0, 1, self.hovered(&rp));
+            ui.arrow_btn("cyc_l", lx, 42.0, 15.0, -1, self.hovered(&lp), true);
+            ui.arrow_btn("cyc_r", rx, 42.0, 15.0, 1, self.hovered(&rp), true);
             ui.text_sh(label, (lx + rx) * 0.5, 50.0, 24.0, TXT, Align::Center);
             ui.text_sh("PHONE", lx - 26.0, 50.0, 15.0, TXT_DIM, Align::Right);
             self.hits.cyc_prev = Some(lp);
@@ -1319,7 +1512,7 @@ impl App {
         let dot_x = sx - sw - 18.0;
         if running {
             let p = 0.5 + 0.5 * ((now * 5.0).sin() as f32);
-            ui.glow(dot_x, 48.0, 16.0, Color::new(LIME.r, LIME.g, LIME.b, 0.5 * p));
+            ui.glow_soft(dot_x, 48.0, 16.0, Color::new(LIME.r, LIME.g, LIME.b, 0.5 * p));
             ui.glyph(ico::DOT, dot_x, 48.0, 22.0, LIME);
         } else {
             ui.glyph(if matches!(state, JobState::Exited(0)) { ico::CHECK } else { ico::ALERT }, dot_x, 48.0, 24.0, scol);
@@ -1405,8 +1598,9 @@ impl App {
         let sbx = x + w - 34.0;
         let up = Rect::new(sbx - 15.0, iy, 30.0, 30.0);
         let dn = Rect::new(sbx - 15.0, iy + ih - 30.0, 30.0, 30.0);
-        ui.circle_arrow(sbx, iy + 15.0, 14.0, -2, self.hovered(&up));
-        ui.circle_arrow(sbx, iy + ih - 15.0, 14.0, 2, self.hovered(&dn));
+        ui.arrow_btn("sb_up", sbx, iy + 15.0, 14.0, -2, self.hovered(&up), self.log_scroll > 0.0);
+        ui.arrow_btn("sb_down", sbx, iy + ih - 15.0, 14.0, 2, self.hovered(&dn), self.log_scroll < max_top);
+        let ui = &self.ui;
         let (ty0, ty1) = (iy + 38.0, iy + ih - 38.0);
         ui.rrect(sbx - 3.0, ty0, 6.0, ty1 - ty0, 3.0, Color::new(0.0, 0.0, 0.0, 0.45));
         if total > rows {
@@ -1484,10 +1678,15 @@ impl App {
                 ui.text_sh(&v, vx + 70.0 + w * 0.11, ry + 33.0, 26.0, TXT, Align::Center);
             }
             if sel {
+                let (can_dec, can_inc) = match i {
+                    1 => (o.volume > 0, o.volume < 10),
+                    6 => (o.log_size > 12, o.log_size < 24),
+                    _ => (true, true),
+                };
                 let lp = Rect::new(vx + 10.0 - 15.0, ry + 8.0, 30.0, 30.0);
                 let np = Rect::new(rr.x + rr.w - 34.0 - 15.0, ry + 8.0, 30.0, 30.0);
-                ui.circle_arrow(vx + 10.0, ry + 23.0, 15.0, -1, self.hovered(&lp));
-                ui.circle_arrow(rr.x + rr.w - 34.0, ry + 23.0, 15.0, 1, self.hovered(&np));
+                ui.arrow_btn("row_l", vx + 10.0, ry + 23.0, 15.0, -1, self.hovered(&lp), can_dec);
+                ui.arrow_btn("row_r", rr.x + rr.w - 34.0, ry + 23.0, 15.0, 1, self.hovered(&np), can_inc);
                 rp = Some(lp);
                 rn = Some(np);
             }
@@ -1495,11 +1694,16 @@ impl App {
         }
         // decorative scrollbar, like the original list screens
         let sbx = x + w - 28.0;
-        ui.circle_arrow(sbx, y + 30.0, 14.0, -2, false);
-        ui.circle_arrow(sbx, y + h - 30.0, 14.0, 2, false);
+        let up = Rect::new(sbx - 15.0, y + 15.0, 30.0, 30.0);
+        let dn = Rect::new(sbx - 15.0, y + h - 45.0, 30.0, 30.0);
+        self.ui.arrow_btn("sb_up", sbx, y + 30.0, 14.0, -2, self.hovered(&up), self.opt_sel > 0);
+        self.ui.arrow_btn("sb_down", sbx, y + h - 30.0, 14.0, 2, self.hovered(&dn), self.opt_sel + 1 < OPT_ROWS.len());
+        let ui = &self.ui;
         ui.rrect(sbx - 3.0, y + 52.0, 6.0, h - 104.0, 3.0, Color::new(0.0, 0.0, 0.0, 0.35));
-        let f = self.opt_sel as f32 / (OPT_ROWS.len() - 1) as f32;
-        ui.disc(sbx, y + 58.0 + (h - 116.0) * f, 6.0, TXT);
+        let f = self.opt_dot.value;
+        let dy = y + 58.0 + (h - 116.0) * f;
+        ui.glow_soft(sbx, dy, 14.0, Color::new(1.0, 1.0, 1.0, 0.35));
+        ui.disc(sbx, dy, 6.0, TXT);
         ui.text_sh(
             "Saved to ~/.config/tiramisu-garage/options.conf as you change them.",
             x + 24.0,
@@ -1509,60 +1713,151 @@ impl App {
             Align::Left,
         );
         self.hits.rows = rows;
+        self.hits.log_up = Some(up);
+        self.hits.log_down = Some(dn);
         self.hits.row_prev = rp;
         self.hits.row_next = rn;
     }
 
-    fn draw_footer(&mut self) {
-        let ui = &self.ui;
-        let fy = ui.h - 40.0;
-        ui.rect(0.0, ui.h - 70.0, ui.w, 70.0, Color::new(0.0, 0.0, 0.0, 0.25));
-        ui.text_sh("TIRAMISU", 30.0, fy + 8.0, 20.0, TXT, Align::Left);
-        let mut x = 140.0;
-        let screen = self.screen();
+    /// The footer buttons of the current screen, most important first:
+    /// they fill the grid from the right, top row before bottom row.
+    fn footer_buttons(&self) -> Vec<FBtn> {
+        use KeyCode as K;
+        const ENTER: &[KeyCode] = &[K::Enter, K::KpEnter];
+        const ESC: &[KeyCode] = &[K::Escape];
+        if self.dialog.is_some() {
+            return Vec::new();
+        }
         let running = self.job.as_ref().map(|j| j.running()).unwrap_or(false);
-        let prompts: Vec<(Vec<(&str, Option<char>)>, &str)> = if self.dialog.is_some() {
-            vec![(vec![("", Some(ico::ARROW_LR))], "Choose"), (vec![("", Some(ico::RETURN))], "Confirm"), (vec![("ESC", None)], "Cancel")]
-        } else {
-            match screen {
-                Screen::Main => vec![(vec![("", Some(ico::ARROW_LR))], "Browse"), (vec![("", Some(ico::RETURN))], "Select"), (vec![("ESC", None)], "Quit")],
-                Screen::Tool(ti) => {
-                    let mut v = vec![(vec![("", Some(ico::ARROW_LR))], "Browse"), (vec![("", Some(ico::RETURN))], "Run"), (vec![("ESC", None)], "Back")];
-                    if self.tools[ti].phone_picker {
-                        v.push((vec![("", Some(ico::ARROW_UD))], "Phone"));
-                    }
-                    v
+        let mut v = match self.screen() {
+            Screen::Main => vec![fb("f_select", "Select", "ENTER", ENTER, FAct::Select), fb("f_quit", "Quit Garage", "ESC", ESC, FAct::Quit)],
+            Screen::Tool(ti) => {
+                let mut v = vec![fb("f_run", "Run", "ENTER", ENTER, FAct::Select), fb("f_back", "Back", "ESC", ESC, FAct::Back)];
+                if self.tools[ti].phone_picker {
+                    v.push(fb("f_phone", "Next Phone", "UP/DN", &[K::Up, K::Down], FAct::PhoneNext));
                 }
-                Screen::Log if running => vec![(vec![("", Some(ico::RETURN))], "Send answer"), (vec![("PGUP", None), ("PGDN", None)], "Scroll"), (vec![("ESC", None)], "Stop")],
-                Screen::Log => vec![(vec![("R", None)], "Run again"), (vec![("C", None)], "Copy log"), (vec![("PGUP", None), ("PGDN", None)], "Scroll"), (vec![("ESC", None)], "Back")],
-                Screen::Dyno => vec![(vec![("", Some(ico::RETURN))], "Fan Curve Tuner"), (vec![("ESC", None)], "Back")],
-                Screen::Tuner => vec![
-                    (vec![("", Some(ico::ARROW_LR))], "Column"),
-                    (vec![("", Some(ico::ARROW_UD))], "Speed"),
-                    (vec![(",", None), (".", None)], "Threshold"),
-                    (vec![("TAB", None)], "CPU/GPU"),
-                    (vec![("H", None)], "Help"),
-                ],
-                Screen::Options => vec![(vec![("", Some(ico::ARROW_UD))], "Choose"), (vec![("", Some(ico::ARROW_LR))], "Change"), (vec![("ESC", None)], "Back")],
+                v
             }
+            Screen::Log if running => vec![fb("f_send", "Send Answer", "ENTER", ENTER, FAct::SendAnswer), fb("f_stop", "Stop", "ESC", ESC, FAct::Stop)],
+            Screen::Log => vec![
+                fb("f_again", "Run Again", "R", &[K::R], FAct::RunAgain),
+                fb("f_back", "Back", "ESC", ESC, FAct::Back),
+                fb("f_copy", "Copy Log", "C", &[K::C], FAct::CopyLog),
+            ],
+            Screen::Dyno => vec![fb("f_tuner", "Fan Curve Tuner", "ENTER", ENTER, FAct::OpenTuner), fb("f_back", "Back", "ESC", ESC, FAct::Back)],
+            Screen::Tuner => vec![
+                fb("f_apply", "Apply", "ENTER", ENTER, FAct::TunerPill(4)),
+                fb("f_back", "Back", "ESC", ESC, FAct::Back),
+                fb("f_reset", "Reset to default", "D", &[K::D], FAct::TunerPill(3)),
+                fb("f_revert", "Revert", "R", &[K::R], FAct::TunerPill(2)),
+                fb("f_preset", "Next Preset", "P", &[K::P], FAct::TunerPill(1)),
+                fb("f_link", if self.tuner.linked() { "Unlink GPU" } else { "Link GPU" }, "L", &[K::L], FAct::TunerPill(0)),
+                fb("f_help", "Tip", "H", &[K::H], FAct::TunerHelp),
+                fb("f_tab", "CPU / GPU", "TAB", &[K::Tab], FAct::TunerTab),
+            ],
+            Screen::Options => vec![fb("f_reset", "Reset to default", "", &[], FAct::RestoreDefaults), fb("f_back", "Back", "ESC", ESC, FAct::Back)],
         };
-        for (caps, cap) in &prompts {
-            x += ui.prompt(x, fy, caps, cap) + 26.0;
+        if self.job.is_some() && !matches!(self.screen(), Screen::Log | Screen::Tuner) {
+            v.push(fb("f_log", if running { "Job Log (running)" } else { "Last Log" }, "L", &[K::L], FAct::LastLog));
         }
-        if self.job.is_some() && !matches!(screen, Screen::Log) && self.dialog.is_none() {
-            let (label, col) = if running { ("JOB RUNNING", LIME) } else { ("LAST LOG", TXT_DIM) };
-            x += ui.prompt(x, fy, &[("L", None)], "") - 6.0;
-            ui.chip(x, fy, label, col);
+        v
+    }
+
+    fn footer_act(&mut self, act: FAct) {
+        let now = self.now();
+        match act {
+            FAct::Select => self.activate(),
+            FAct::Quit => self.ask_quit(),
+            FAct::Back => self.back(),
+            FAct::LastLog => {
+                if self.job.is_some() {
+                    self.fx(Fx::Accept);
+                    self.go(Nav::Push(Screen::Log));
+                }
+            }
+            FAct::PhoneNext => {
+                self.ui.press("cyc_r");
+                self.opts.phone = (self.opts.phone + 1) % 3;
+                self.save_opts();
+                self.fx(Fx::Tick);
+            }
+            FAct::SendAnswer => {
+                let line = std::mem::take(&mut self.log_input);
+                if let Some(j) = self.job.as_mut() {
+                    j.send_line(&line);
+                }
+                self.log_follow = true;
+                self.fx(Fx::Tick);
+            }
+            FAct::Stop => {
+                self.fx(Fx::Accept);
+                let title = self.job.as_ref().map(|j| j.spec.title.clone()).unwrap_or_default();
+                self.dialog = Some(Dialog::Confirm { text: format!("Stop “{title}”?"), yes: false, action: DAction::StopJob, opened: now });
+            }
+            FAct::RunAgain => {
+                if let Some(spec) = self.job.as_ref().map(|j| j.spec.clone()) {
+                    self.fx(Fx::Accept);
+                    self.start_job(spec);
+                }
+            }
+            FAct::CopyLog => {
+                if let Some(j) = self.job.as_ref() {
+                    let text = j.term.lock().unwrap().plain();
+                    mq_window::clipboard_set(&text);
+                    self.fx(Fx::Tick);
+                    self.toast("Log copied to the clipboard", LIME);
+                }
+            }
+            FAct::OpenTuner => {
+                self.fx(Fx::Accept);
+                self.go(Nav::Push(Screen::Tuner));
+            }
+            FAct::TunerPill(i) => {
+                let mut ev = Vec::new();
+                if self.tuner.loaded && !self.tuner.busy() {
+                    self.tuner.pill_action(i, &mut ev);
+                }
+                self.tuner_events(ev);
+            }
+            FAct::TunerHelp => self.dialog = Some(Dialog::Message { text: tuner::HELP.into(), opened: now }),
+            FAct::TunerTab => {
+                self.tuner.toggle_tab(&self.ui, now);
+                self.fx(Fx::Whoosh);
+            }
+            FAct::RestoreDefaults => {
+                self.fx(Fx::Accept);
+                self.dialog = Some(Dialog::Confirm { text: "Restore every option to its default?".into(), yes: false, action: DAction::ResetOptions, opened: now });
+            }
         }
-        // pills on the right
-        let pw = 150.0;
-        let quit = ui.pill(ui.w - 30.0 - pw, fy - 15.0, pw, "Quit Garage", self.hovered(&Rect::new(ui.w - 30.0 - pw, fy - 15.0, pw, 30.0)));
-        self.hits.quit = Some(quit);
-        if self.stack.len() > 1 {
-            let br = Rect::new(ui.w - 30.0 - pw * 2.0 - 12.0, fy - 15.0, pw, 30.0);
-            let back = ui.pill(br.x, br.y, pw, "Back", self.hovered(&br));
-            self.hits.back = Some(back);
+    }
+
+    fn draw_footer(&mut self) {
+        let buttons = self.footer_buttons();
+        let ui = &self.ui;
+        let (bw, bh, gx, gy) = (214.0, 26.0, 10.0, 6.0);
+        let band = bh * 2.0 + gy + 20.0;
+        ui.rect(0.0, ui.h - band, ui.w, band, Color::new(0.0, 0.0, 0.0, 0.30));
+        // profile name, bottom-left like the game
+        ui.text_sh("Tiramisu", 34.0, ui.h - band * 0.5 + 8.0, 24.0, TXT, Align::Left);
+        let running = self.job.as_ref().map(|j| j.running()).unwrap_or(false);
+        if running && self.screen() != Screen::Log {
+            ui.chip(150.0, ui.h - band * 0.5, "JOB RUNNING", LIME);
         }
+        // grid: column by column from the right, top cell then bottom cell
+        let y_top = ui.h - band + 10.0;
+        let m = ui.mouse();
+        let mut hits = Vec::new();
+        for (i, b) in buttons.iter().enumerate() {
+            let col = (i / 2) as f32;
+            let row = (i % 2) as f32;
+            let x = ui.w - 30.0 - bw - col * (bw + gx);
+            let y = y_top + row * (bh + gy);
+            let r = Rect::new(x, y, bw, bh);
+            let accent = b.act == FAct::TunerPill(4) && self.tuner.dirty();
+            ui.button(b.key, x, y, bw, bh, &b.label, b.hint, hit(&r, m) || accent);
+            hits.push((r, b.key, b.act));
+        }
+        self.hits.footer = hits;
     }
 
     fn draw_dialog(&mut self) {
@@ -1573,7 +1868,7 @@ impl App {
             Dialog::Confirm { opened, .. } | Dialog::Input { opened, .. } | Dialog::Message { opened, .. } => *opened,
         };
         let a = smooth(opened, opened + 0.12, now);
-        let mut ui2 = Ui { alpha: a, ..clone_ui(ui) };
+        let mut ui2 = ui.faded(a);
         ui2.dx = 0.0;
         let ui = &ui2;
         ui.rect(0.0, 0.0, ui.w, ui.h, Color::new(0.0, 0.0, 0.0, 0.35));
@@ -1631,13 +1926,14 @@ impl App {
         let by = y + h - 64.0;
         let yr = Rect::new(x + 40.0, by, bw, 40.0);
         let nr = Rect::new(x + w - 40.0 - bw, by, bw, 40.0);
-        for (r, label, sel) in [(yr, yes_label, yes_sel), (nr, no_label, !yes_sel)] {
-            let hot = self.hovered(&r);
-            ui.rrect(r.x, r.y, r.w, r.h, 8.0, if sel || hot { Color::new(0.10, 0.11, 0.11, 0.92) } else { Color::new(0.30, 0.32, 0.32, 0.75) });
-            if sel {
-                ui.rrect_line(r.x, r.y, r.w, r.h, 8.0, 1.5, Color::new(LIME.r, LIME.g, LIME.b, 0.8));
-            }
-            ui.text_sh(label, r.x + r.w * 0.5, r.y + 28.0, 24.0, if sel { LIME } else { TXT }, Align::Center);
+        for (key, r, label, sel) in [("dlg_yes", yr, yes_label, yes_sel), ("dlg_no", nr, no_label, !yes_sel)] {
+            // selection and hover glide in and out over 250 ms
+            let g = ui.glow(key, sel || self.hovered(&r));
+            let fill = Color::new(0.30 - 0.20 * g, 0.32 - 0.21 * g, 0.32 - 0.21 * g, 0.75 + 0.17 * g);
+            ui.rrect(r.x, r.y, r.w, r.h, 8.0, fill);
+            ui.rrect_line(r.x, r.y, r.w, r.h, 8.0, 1.5, Color::new(LIME.r, LIME.g, LIME.b, 0.8 * g));
+            let col = Color::new(TXT.r + (LIME.r - TXT.r) * g, TXT.g + (LIME.g - TXT.g) * g, TXT.b + (LIME.b - TXT.b) * g, 1.0);
+            ui.text_sh(label, r.x + r.w * 0.5, r.y + 28.0, 24.0, col, Align::Center);
         }
         self.hits.dlg_yes = Some(yr);
         self.hits.dlg_no = Some(nr);
@@ -1652,7 +1948,7 @@ impl App {
             return;
         }
         let a = smooth(0.0, 0.15, age) * (1.0 - smooth(2.6, 3.2, age));
-        let ui = Ui { alpha: a, ..clone_ui(&self.ui) };
+        let ui = self.ui.faded(a);
         let w = ui.measure(&text, 22.0) + 60.0;
         let x = ui.w * 0.5 - w * 0.5;
         let y = ui.h - 124.0 + (1.0 - ease_out(a)) * 10.0;
@@ -1723,7 +2019,7 @@ fn key_repeat(rep: &mut Vec<(KeyCode, f64, f64)>, k: KeyCode, now: f64) -> bool 
 
 /// Fonts are cheap handles (Arc), so a Ui can be copied for a differently faded pass.
 fn clone_ui(ui: &Ui) -> Ui {
-    Ui { font: ui.font.clone(), black: ui.black.clone(), mono: ui.mono.clone(), k: ui.k, w: ui.w, h: ui.h, t: ui.t, alpha: ui.alpha, dx: ui.dx }
+    ui.faded(ui.alpha)
 }
 
 #[macroquad::main(window_conf)]
@@ -1772,6 +2068,8 @@ async fn main() {
         quit: false,
         shot: None,
         demo: std::env::var("GARAGE_DEMO").ok().map(Demo::new),
+        warm_k: -1.0,
+        opt_dot: Spring::new(0.0),
     };
     if let Some(d) = app.demo.as_ref() {
         let _ = std::fs::create_dir_all(&d.dir);
@@ -1781,6 +2079,7 @@ async fn main() {
     loop {
         let dt = get_frame_time().min(0.05);
         app.ui.begin_frame();
+        app.prewarm();
         let now = app.now();
         app.chars.clear();
         while let Some(c) = get_char_pressed() {

@@ -89,6 +89,10 @@ impl Scene {
             target: vec3(0.0, 1.45, 0.0),
             up: Vec3::Y,
             fovy: 34f32.to_radians(),
+            // the default near plane (0.01) wastes almost all depth precision
+            // right in front of the lens and made the laptop screen z-fight
+            z_near: 1.0,
+            z_far: 60.0,
             ..Default::default()
         });
 
@@ -167,7 +171,7 @@ impl Scene {
             mb.tri(p(0.0, 0.0, top), p(a0, 2.45, top), p(a1, 2.45, top), deck_in, deck_out, deck_out);
             // striped rim ring on top
             let stripe = if (k / 2) % 2 == 0 { yellow } else { black };
-            mb.quad([p(a0, 2.45, top + 0.002), p(a0, r, top + 0.002), p(a1, r, top + 0.002), p(a1, 2.45, top + 0.002)], stripe);
+            mb.quad([p(a0, 2.45, top + 0.006), p(a0, r, top + 0.006), p(a1, r, top + 0.006), p(a1, 2.45, top + 0.006)], stripe);
             // outer wall
             let mid = (a0 + a1) * 0.5;
             let n = rot(vec3(mid.cos(), 0.0, mid.sin()));
@@ -181,8 +185,8 @@ impl Scene {
         for k in 0..48 {
             let a0 = k as f32 / 48.0 * std::f32::consts::TAU;
             let a1 = (k + 1) as f32 / 48.0 * std::f32::consts::TAU;
-            let e = |a: f32| rot(vec3(a.cos() * 2.3, top + 0.01, a.sin() * 1.7));
-            mb.tri(rot(vec3(0.0, top + 0.01, 0.0)), e(a0), e(a1), glow, edge, edge);
+            let e = |a: f32| rot(vec3(a.cos() * 2.3, top + 0.014, a.sin() * 1.7));
+            mb.tri(rot(vec3(0.0, top + 0.014, 0.0)), e(a0), e(a1), glow, edge, edge);
         }
     }
 
@@ -225,7 +229,7 @@ impl Scene {
         drop(boxed);
 
         // keyboard deck, keys, touchpad
-        let ytop = y0 + th + 0.003;
+        let ytop = y0 + th + 0.008;
         let deck = rgb(0x17191c);
         let q = |x0: f32, z0: f32, x1: f32, z1: f32, y: f32| [rot(vec3(x0, y, z0)), rot(vec3(x1, y, z0)), rot(vec3(x1, y, z1)), rot(vec3(x0, y, z1))];
         mb.quad(q(-1.45, -0.98, 1.45, 0.05, ytop), shade(deck, Vec3::Y));
@@ -243,16 +247,17 @@ impl Scene {
                     continue; // space bar
                 }
                 let kw = if wide == 1 { kw * 5.0 + 0.035 * 4.0 } else { kw };
-                mb.quad(q(kx0, kz0, kx0 + kw, kz0 + kd, ytop + 0.012), shade(key, Vec3::Y));
+                mb.quad(q(kx0, kz0, kx0 + kw, kz0 + kd, ytop + 0.016), shade(key, Vec3::Y));
             }
         }
         // keyboard backlight bleed (red, like a gaming board)
         let bleed = Color::new(0.9, 0.15, 0.1, 0.10 + 0.04 * ((t * 2.1).sin() as f32));
-        mb.quad(q(-1.45, -0.98, 1.45, 0.05, ytop + 0.006), bleed);
+        mb.quad(q(-1.45, -0.98, 1.45, 0.05, ytop + 0.008), bleed);
         mb.quad(q(-0.55, 0.22, 0.55, 0.92, ytop), shade(rgb(0x23272b), Vec3::Y));
 
         // screen on the inside of the lid
-        let face = |a: f32, b: f32| rot(hinge + vec3(w * a, 0.0, 0.0) + dir * (d * b) - nrm * 0.004);
+        let layer = |a: f32, b: f32, lift: f32| rot(hinge + vec3(w * a, 0.0, 0.0) + dir * (d * b) - nrm * lift);
+        let face = |a: f32, b: f32| layer(a, b, 0.008);
         let bez = 0.05;
         let scr = [face(bez, 0.08), face(1.0 - bez, 0.08), face(1.0 - bez, 0.95), face(bez, 0.95)];
         let s_lo = rgb(0x0b1a2a);
@@ -260,11 +265,13 @@ impl Scene {
         mb.quad4(scr, [s_lo, s_lo, s_hi, s_hi]);
         // a tiny garage menu on the tiny screen
         let bar = Color::new(0.55, 0.58, 0.58, 0.55);
-        mb.quad([face(0.1, 0.62), face(0.9, 0.62), face(0.9, 0.78), face(0.1, 0.78)], bar);
+        let bar_l = |a: f32, b: f32| layer(a, b, 0.018);
+        mb.quad([bar_l(0.1, 0.62), bar_l(0.9, 0.62), bar_l(0.9, 0.78), bar_l(0.1, 0.78)], bar);
         let lime = Color::new(0.78, 0.89, 0.32, 0.6 + 0.4 * (((t * 3.5).sin() as f32) * 0.5 + 0.5));
         let sel = 0.1 + 0.27 * (((t * 0.5).floor() as i64).rem_euclid(3) as f32);
-        mb.quad([face(sel, 0.63), face(sel + 0.26, 0.63), face(sel + 0.26, 0.77), face(sel, 0.77)], lime);
-        mb.quad([face(0.06, 0.86), face(0.3, 0.86), face(0.3, 0.9), face(0.06, 0.9)], Color::new(0.78, 0.89, 0.32, 0.9));
+        let top_l = |a: f32, b: f32| layer(a, b, 0.028);
+        mb.quad([top_l(sel, 0.63), top_l(sel + 0.26, 0.63), top_l(sel + 0.26, 0.77), top_l(sel, 0.77)], lime);
+        mb.quad([bar_l(0.06, 0.86), bar_l(0.3, 0.86), bar_l(0.3, 0.9), bar_l(0.06, 0.9)], Color::new(0.78, 0.89, 0.32, 0.9));
         // a thin lime light line along the front edge
         let fy = y0 + th * 0.5;
         mb.quad(

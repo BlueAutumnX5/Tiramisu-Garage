@@ -1,19 +1,27 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <!-- Tiramisu Garage badge: the menu's selection box, a chrome "TG" monogram
+       (outlines from the app's embedded Noto Sans Black Italic, OFL), a faint
+       gauge arc and the turntable's hazard stripe. -->
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3a3f42"/>
-      <stop offset="1" stop-color="#151719"/>
+      <stop offset="0" stop-color="#3b4044"/>
+      <stop offset="1" stop-color="#121416"/>
+    </linearGradient>
+    <linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.48" stop-color="#cfe4fa"/>
+      <stop offset="0.52" stop-color="#8fb4dc"/>
+      <stop offset="1" stop-color="#d9ebff"/>
     </linearGradient>
   </defs>
-  <rect x="10" y="10" width="236" height="236" rx="40" fill="url(#bg)"/>
-  <rect x="16" y="16" width="224" height="224" rx="35" fill="none" stroke="#c6e351" stroke-width="9"/>
-  <!-- gauge -->
-  <path d="M 58 176 A 78 78 0 1 1 198 176" fill="none" stroke="#e9ecee" stroke-width="14" stroke-linecap="round"/>
-  <path d="M 178 98 A 78 78 0 0 1 198 176" fill="none" stroke="#ff5c3d" stroke-width="14" stroke-linecap="round"/>
-  <line x1="128" y1="146" x2="182" y2="92" stroke="#ff6a38" stroke-width="10" stroke-linecap="round"/>
-  <circle cx="128" cy="146" r="15" fill="#e9ecee"/>
-  <!-- hazard stripes -->
-  <g transform="translate(48 196)">
+  <rect x="10" y="10" width="236" height="236" rx="42" fill="url(#bg)"/>
+  <rect x="16" y="16" width="224" height="224" rx="37" fill="none" stroke="#c6e351" stroke-width="10"/>
+  <path d="M 62 168 A 74 74 0 1 1 194 168" fill="none" stroke="#ffffff" stroke-opacity="0.16" stroke-width="12" stroke-linecap="round"/>
+  <path d="M 176 92 A 74 74 0 0 1 194 168" fill="none" stroke="#ff5c3d" stroke-opacity="0.55" stroke-width="12" stroke-linecap="round"/>
+  <g fill="#0a1830" stroke="#0a1830" stroke-width="109.2" stroke-linejoin="round"><path transform="translate(46.32 170.54) scale(0.14651 -0.14651)" d="M86 0 204 564H77L109 714H538L506 564H379L260 0Z"/><path transform="translate(108.74 170.54) scale(0.14651 -0.14651)" d="M275 -10Q159 -10 99.5 54.5Q40 119 40 239Q40 306 55.0 375.5Q70 445 99.5 507.0Q129 569 175.0 618.5Q221 668 283.0 696.0Q345 724 425 724Q480 724 529.5 711.0Q579 698 612 677L540 533Q512 552 480.0 563.0Q448 574 412 574Q365 574 329.5 543.0Q294 512 269.5 462.5Q245 413 233.0 357.0Q221 301 221 251Q221 214 229.0 189.5Q237 165 253.5 153.0Q270 141 293 141Q306 141 317.5 142.5Q329 144 342 147L369 274H288L318 418H571L490 34Q434 13 378.5 1.5Q323 -10 275 -10Z"/></g>
+  <g fill="url(#chrome)"><path transform="translate(46.32 170.54) scale(0.14651 -0.14651)" d="M86 0 204 564H77L109 714H538L506 564H379L260 0Z"/><path transform="translate(108.74 170.54) scale(0.14651 -0.14651)" d="M275 -10Q159 -10 99.5 54.5Q40 119 40 239Q40 306 55.0 375.5Q70 445 99.5 507.0Q129 569 175.0 618.5Q221 668 283.0 696.0Q345 724 425 724Q480 724 529.5 711.0Q579 698 612 677L540 533Q512 552 480.0 563.0Q448 574 412 574Q365 574 329.5 543.0Q294 512 269.5 462.5Q245 413 233.0 357.0Q221 301 221 251Q221 214 229.0 189.5Q237 165 253.5 153.0Q270 141 293 141Q306 141 317.5 142.5Q329 144 342 147L369 274H288L318 418H571L490 34Q434 13 378.5 1.5Q323 -10 275 -10Z"/></g>
+  <path d="M112 176 L206 176 L202 184 L108 184 Z" fill="#c6e351"/>
+  <g transform="translate(48 198)">
     <rect width="160" height="22" rx="6" fill="#d9b22a"/>
     <path d="M14 0h16l-14 22h-16zM50 0h16l-14 22h-16zM86 0h16l-14 22h-16zM122 0h16l-14 22h-16z" fill="#141516"/>
   </g>

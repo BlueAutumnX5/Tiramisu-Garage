@@ -61,11 +61,40 @@ pub struct Ui {
     pub alpha: f32,
     /// horizontal offset applied to x coordinates (used for slide transitions)
     pub dx: f32,
+    /// per-widget highlight level (0 grey .. 1 lime) and when it was last stepped
+    glow: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, (f32, f64)>>>,
+    /// when each widget was last pressed (click or hotkey)
+    presses: std::rc::Rc<std::cell::RefCell<std::collections::HashMap<String, f64>>>,
+}
+
+/// How long a highlight takes to fade in or out (seconds).
+pub const FADE: f32 = 0.25;
+
+fn mix(a: Color, b: Color, t: f32) -> Color {
+    Color::new(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t)
 }
 
 impl Ui {
     pub fn new(font: Font, black: Font, mono: Font) -> Self {
-        Ui { font, black, mono, k: 1.0, w: 1280.0, h: 720.0, t: 0.0, alpha: 1.0, dx: 0.0 }
+        Ui { font, black, mono, k: 1.0, w: 1280.0, h: 720.0, t: 0.0, alpha: 1.0, dx: 0.0, glow: Default::default(), presses: Default::default() }
+    }
+
+    /// A copy drawn at a different opacity that shares the widget
+    /// animation state (fonts are cheap Arc handles).
+    pub fn faded(&self, alpha: f32) -> Ui {
+        Ui {
+            font: self.font.clone(),
+            black: self.black.clone(),
+            mono: self.mono.clone(),
+            k: self.k,
+            w: self.w,
+            h: self.h,
+            t: self.t,
+            alpha,
+            dx: self.dx,
+            glow: self.glow.clone(),
+            presses: self.presses.clone(),
+        }
     }
 
     pub fn begin_frame(&mut self) {
@@ -231,7 +260,7 @@ impl Ui {
     }
 
     /// Soft radial glow: opaque-ish centre fading to nothing at `r`.
-    pub fn glow(&self, cx: f32, cy: f32, r: f32, col: Color) {
+    pub fn glow_soft(&self, cx: f32, cy: f32, r: f32, col: Color) {
         let seg = 40;
         let c = self.c(col);
         let edge = Color::new(col.r, col.g, col.b, 0.0);
@@ -304,17 +333,27 @@ impl Ui {
     }
 
     /// An icon glyph centred on (cx, cy).
+    ///
+    /// Icons animate in size (the selection pop, the shrink with distance),
+    /// but every new pixel size makes the font engine rasterise the glyph
+    /// again and grow its atlas texture: that caused 100+ ms hitches while
+    /// holding an arrow key. So glyphs are rasterised only at sizes rounded
+    /// up to a multiple of 8 px (cached once) and scaled down to the exact
+    /// size when drawn.
     pub fn glyph(&self, ch: char, cx: f32, cy: f32, size: f32, col: Color) {
         let s = ch.to_string();
-        let fs = self.fs(size);
-        let d = measure_text(&s, Some(&self.font), fs, 1.0);
+        let target = (size * self.k).max(4.0);
+        let base = ((target / 8.0).ceil() * 8.0).min(400.0);
+        let fs = base as u16;
+        let scale = target / base;
+        let d = measure_text(&s, Some(&self.font), fs, scale);
         let x = self.px(cx) - d.width * 0.5;
         let y = self.py(cy) - d.height * 0.5 + d.offset_y;
         draw_text_ex(
             &s,
-            x.round(),
-            y.round(),
-            TextParams { font: Some(&self.font), font_size: fs, font_scale: 1.0, color: self.c(col), ..Default::default() },
+            x,
+            y,
+            TextParams { font: Some(&self.font), font_size: fs, font_scale: scale, color: self.c(col), ..Default::default() },
         );
     }
 
@@ -327,11 +366,74 @@ impl Ui {
         self.glyph(ch, cx, cy, size, col);
     }
 
+    // ------------------------------------------------------------ widget animation
+
+    /// Mark a widget as pressed now (mouse click or its hotkey).
+    pub fn press(&self, key: &str) {
+        self.presses.borrow_mut().insert(key.to_string(), self.t);
+    }
+
+    /// Seconds since the widget was last pressed (large if never).
+    pub fn since_press(&self, key: &str) -> f32 {
+        self.presses.borrow().get(key).map(|t0| (self.t - t0) as f32).unwrap_or(99.0)
+    }
+
+    /// Highlight level of a widget, gliding toward 1 while `on` (or for
+    /// FADE seconds after a press) and back toward 0 otherwise, so buttons
+    /// turn green and grey again smoothly instead of switching.
+    pub fn glow(&self, key: &str, on: bool) -> f32 {
+        let on = on || self.since_press(key) < FADE;
+        let mut map = self.glow.borrow_mut();
+        let e = map.entry(key.to_string()).or_insert((0.0, self.t));
+        let dt = ((self.t - e.1) as f32).clamp(0.0, 0.1);
+        e.1 = self.t;
+        let step = dt / FADE;
+        e.0 = if on { (e.0 + step).min(1.0) } else { (e.0 - step).max(0.0) };
+        let x = e.0;
+        x * x * (3.0 - 2.0 * x)
+    }
+
+    /// Press "pop": quick swell to 1 in 70 ms, then an eased return to 0.
+    pub fn pop(&self, key: &str) -> f32 {
+        let t = self.since_press(key);
+        if t < 0.07 {
+            let x = t / 0.07;
+            1.0 - (1.0 - x) * (1.0 - x)
+        } else {
+            let x = ((t - 0.07) / 0.26).clamp(0.0, 1.0);
+            1.0 - x * x * (3.0 - 2.0 * x)
+        }
+    }
+
     // ------------------------------------------------------------ widgets
 
     /// White ring with an arrow inside; `dir` = -1 left, 1 right, -2 up, 2 down.
     pub fn circle_arrow(&self, cx: f32, cy: f32, r: f32, dir: i32, hot: bool) {
         let col = if hot { LIME } else { Color::new(0.93, 0.94, 0.94, 0.92) };
+        self.circle_arrow_col(cx, cy, r, dir, col);
+    }
+
+    /// An arrow button that reacts: it glides to lime on hover, and when
+    /// pressed (click or arrow key) it also swells ~30 % and eases back.
+    /// With nothing left in its direction (`enabled` false) it fades to a
+    /// dim grey and stops reacting.
+    pub fn arrow_btn(&self, key: &str, cx: f32, cy: f32, r: f32, dir: i32, hover: bool, enabled: bool) {
+        let off = self.glow(&format!("{key}#off"), !enabled);
+        let g = self.glow(key, hover && enabled) * (1.0 - off);
+        let p = self.pop(key) * (1.0 - off);
+        let base = mix(Color::new(0.93, 0.94, 0.94, 0.92), Color::new(0.50, 0.52, 0.53, 0.45), off);
+        let col = mix(base, LIME, g);
+        if p > 0.0 {
+            self.glow_disc(cx, cy, r * 2.0, Color::new(LIME.r, LIME.g, LIME.b, 0.45 * p));
+        }
+        self.circle_arrow_col(cx, cy, r * (1.0 + 0.30 * p), dir, col);
+    }
+
+    fn glow_disc(&self, cx: f32, cy: f32, r: f32, col: Color) {
+        self.glow_soft(cx, cy, r, col);
+    }
+
+    fn circle_arrow_col(&self, cx: f32, cy: f32, r: f32, dir: i32, col: Color) {
         self.disc(cx, cy, r, Color::new(0.0, 0.0, 0.0, 0.18));
         self.arc(cx, cy, r - 2.6, r, 0.0, std::f32::consts::TAU, col);
         let (ux, uy) = match dir {
@@ -385,12 +487,24 @@ impl Ui {
         cx - x
     }
 
-    /// Outlined pill button (bottom-right "Back" / "Quit" style). Returns its rect.
-    pub fn pill(&self, x: f32, y: f32, w: f32, label: &str, hot: bool) -> Rect {
-        let h = 30.0;
-        self.rrect(x, y, w, h, h * 0.5, Color::new(0.03, 0.035, 0.04, 0.78));
-        self.rrect_line(x, y, w, h, h * 0.5, 1.6, if hot { LIME } else { Color::new(0.85, 0.87, 0.88, 0.95) });
-        self.text_sh(label, x + w * 0.5, y + 21.0, 19.0, if hot { LIME } else { TXT }, Align::Center);
+    /// The game's footer button: a long, slightly rounded black bar with a
+    /// grey outline and white italic label; outline and label glide to lime
+    /// (FADE seconds) on hover or press. `hint` is the hotkey, shown small
+    /// and dim at the left end. Returns the button's rect.
+    pub fn button(&self, key: &str, x: f32, y: f32, w: f32, h: f32, label: &str, hint: &str, hover: bool) -> Rect {
+        let g = self.glow(key, hover);
+        let edge = mix(Color::new(0.72, 0.74, 0.75, 0.95), LIME, g);
+        let txt = mix(TXT, LIME, g);
+        self.rrect(x, y, w, h, 7.0, Color::new(0.02, 0.025, 0.03, 0.86));
+        if g > 0.0 {
+            self.rrect(x, y, w, h, 7.0, Color::new(LIME.r, LIME.g, LIME.b, 0.07 * g));
+        }
+        self.rrect_line(x, y, w, h, 7.0, 1.6, edge);
+        let size = (h * 0.66).min(19.0);
+        self.text_sh(label, x + w * 0.5, y + h * 0.5 + size * 0.36, size, txt, Align::Center);
+        if !hint.is_empty() {
+            self.text_with(&self.black, hint, x + 10.0, y + h * 0.5 + 4.5, 12.0, mix(Color::new(0.55, 0.58, 0.6, 0.9), LIME, g * 0.6), Align::Left);
+        }
         Rect::new(x, y, w, h)
     }
 
