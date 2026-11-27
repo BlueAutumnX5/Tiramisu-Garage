@@ -1,13 +1,12 @@
 # Tiramisu Garage
 
-One launcher for every workshop script on my laptop, dressed as a 2004
-street-racing front end: a translucent icon carousel with a pulsing lime
-selection box, a hazard-striped turntable with the laptop as the "hero car",
-keycap prompts and "Would you like to…?" dialogs.
+Designed for my laptop setup. One launcher for every workshop script on my laptop,
+dressed as a Need for Speed Underground 2 front end. And for some reason, the car
+is now the laptop, hehe.
 
 ![Main menu](docs/screenshots/main-menu.png)
 
-It's written in Rust with [macroquad](https://macroquad.rs). Fonts are embedded,
+Written in Rust with [macroquad](https://macroquad.rs). Fonts are embedded,
 sounds are synthesised at start-up and every icon and shape is drawn at runtime,
 so there are no asset files to lose. The look is an homage drawn from scratch and
 uses no game assets.
