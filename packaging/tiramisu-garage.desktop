@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Tiramisu Garage
+GenericName=Workshop Tools
+Comment=All the workshop scripts behind one street-racing style menu
+Exec=tiramisu-garage
+Icon=tiramisu-garage
+Terminal=false
+Categories=System;
+Keywords=safe-update;phone-doctor;battcheck;fan;dyno;hotspot;rescue;

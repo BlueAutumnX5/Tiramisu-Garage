@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3a3f42"/>
+      <stop offset="1" stop-color="#151719"/>
+    </linearGradient>
+  </defs>
+  <rect x="10" y="10" width="236" height="236" rx="40" fill="url(#bg)"/>
+  <rect x="16" y="16" width="224" height="224" rx="35" fill="none" stroke="#c6e351" stroke-width="9"/>
+  <!-- gauge -->
+  <path d="M 58 176 A 78 78 0 1 1 198 176" fill="none" stroke="#e9ecee" stroke-width="14" stroke-linecap="round"/>
+  <path d="M 178 98 A 78 78 0 0 1 198 176" fill="none" stroke="#ff5c3d" stroke-width="14" stroke-linecap="round"/>
+  <line x1="128" y1="146" x2="182" y2="92" stroke="#ff6a38" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="128" cy="146" r="15" fill="#e9ecee"/>
+  <!-- hazard stripes -->
+  <g transform="translate(48 196)">
+    <rect width="160" height="22" rx="6" fill="#d9b22a"/>
+    <path d="M14 0h16l-14 22h-16zM50 0h16l-14 22h-16zM86 0h16l-14 22h-16zM122 0h16l-14 22h-16z" fill="#141516"/>
+  </g>
+</svg>

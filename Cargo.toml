@@ -1,0 +1,15 @@
+[package]
+name = "tiramisu-garage"
+version = "0.1.0"
+edition = "2024"
+description = "One launcher for all of Tiramisu's workshop scripts, dressed as a 2004 street-racing front end"
+
+[dependencies]
+macroquad = { version = "0.4.16", features = ["audio"] }
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+opt-level = 3
+lto = "thin"
